@@ -178,3 +178,6 @@ pyrightconfig.json
 /references
 
 /data/detectedFaces/*
+
+/data
+/data/*
