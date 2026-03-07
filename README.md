@@ -1,6 +1,31 @@
-# System Architecture
+Objectives
+* To develop a Python-based face recognition attendance prototype that detects a face from a webcam frame, preprocesses it into a standardized ROI, and identifies the most similar enrolled student using LBPH face recognition.
+* To build and train an LBPHFaceRecognizer model using an augmented dataset, and evaluate its robustness under different real-world lighting conditions.
+* To evaluate the proposed system using quantitative metrics (e.g., Top-1 accuracy, FAR/FRR) and present results clearly.
 
-```
+
+Training steps:
+* Step 1: Data Collection & Augmentation
+Member 3 expands the raw dataset from 16-20 images to ~100 images per person using Albumentations, simulating different lighting conditions.
+* Step 2: Preprocessing
+The augmented dataset goes through Member 1's preprocessing pipeline (Face Detection, Crop, Resize, Grayscale, Illumination Normalization).
+* Step 3: Model Training
+Member 2 trains the LBPHFaceRecognizer model on the preprocessed dataset and tunes LBPH parameters (radius, neighbors, grid).
+* Step 4: Evaluation
+Member 3 evaluates the model under different lighting conditions and reports accuracy, FAR/FRR, and confusion matrix.
+
+
+Notes from lecturer:
+* PCA removed — overengineered for this scenario.
+* Logistic Regression threshold removed — not suitable for live/real-world conditions (e.g., dark room).
+* Focus should be on demonstrating illumination robustness through image processing techniques.
+* LBPHFaceRecognizer is approved. Model has built-in similarity matching via confidence score.
+* Pre-trained weights are allowed as long as image processing techniques and algorithms are showcased.
+* 100 images per person confirmed for training.
+________________
+
+
+# System Architecture
 ┌─────────────────────────────────────────────────────────┐
 │              Presentation Layer                         │
 │  - Streamlit UI                                         │
@@ -18,102 +43,151 @@
 ┌────────────────────▼────────────────────────────────────┐
 │            Processing Layer                             │
 │  - FaceDetector (Member 1)                              │
-│  - FeatureExtractor (Member 2)                          │
-│  - CBIRMatchingEngine (Member 3)                        │
+│  - LBPHModelTrainer (Member 2)                          │
+│  - AugmentationAndEvaluator (Member 3)                  │
 └────────────────────┬────────────────────────────────────┘
                      │
 ┌────────────────────▼────────────────────────────────────┐
 │              Data Layer                                 │
 │  - DatabaseManager (Member 4)                           │
 │  - File I/O operations                                  │
-│  - Data persistence (CSV, numpy files)                  │
+│  - Data persistence (CSV, numpy files, .yml model)      │
 └─────────────────────────────────────────────────────────┘
-```
 
----
 
-## Member 1 : Face Detection and Preprocessing
+________________
 
-**Coding Task :**
-1. Face detection  
-2. image preprocessing  
-3. input/output interface  
-   - input raw image output standardized grayscale face image  
 
-**Documentation:**
-1. section 2.2  
-   - compare face detection methods  
-2. section 3.3  
-   - describe preprocessing pipeline  
-   - explain how ur approach works  
-3. section 4.1  
-   - show detection success rate  
-4. section 1.1  
+## Member 1: Face Detection and Preprocessing
 
----
-
-## Member 2: Feature Extraction
 
 **Coding Task:**
-1. Feature Extraction Algorithm  
-2. Feature Optimization  
-   - feature normalization  
-3. Feature Storage  
-   - save features to .npy files  
+      1. Preprocessing (before detection)
+      * Resize raw frame to a fixed input scale (e.g., width 640) to reduce computational load.
+      2. Face detection
+      * Use Haar Cascade Classifier (cv2.CascadeClassifier) or face_recognition library.
+      * Detect face bounding box from a raw image/frame.
+      * Run face detection every N frames (5-10 is best practice).
+      * Handle multi-face cases (select largest face or process all faces based on system mode).
+      3. Preprocessing (after detection)
+      * Crop face ROI with margin (padding) and boundary checking (prevent crashes).
+      * Convert to grayscale and resize to fixed size (e.g., 128×128) for mathematical consistency.
+      * Apply illumination normalization on face ROI:
+         - Histogram Equalization
+         - CLAHE (Contrast Limited Adaptive Histogram Equalization)
+         - Gamma Correction (for low-light / dark room scenarios)
+      4. Input/Output interface (module contract)
+      * Input: raw RGB/BGR image or camera frame.
+      * Output: standardized grayscale face image + detection metadata (bbox, confidence, status).
+
 
 **Documentation:**
-1. section 2.1  
-   - Explain what are features in face recognition  
-2. section 2.2  
-   - compare existing algorithm  
-3. section 3.3  
-   - Explain how your chosen method extracts features  
-4. section 1.2  
+1. Section 2.2
+   - Compare face detection methods (Haar Cascade vs face_recognition vs YOLO)
+2. Section 3.3
+   - Describe preprocessing pipeline
+   - Explain illumination normalization techniques and why they are used
+3. Section 4.1
+   - Show detection success rate
+4. Section 1.1
+
 
 ---
 
-## Member 3: CBIR Matching Engine
+
+## Member 2: LBPH Model Training
+
 
 **Coding Task:**
-1. Similarity Calculation  
-2. Retrieval Algorithm  
-3. Threshold Determination  
-   - Set reasonable similarity threshold  
-   - handle no match scenario  
+      1. Model training
+      * Train cv2.face.LBPHFaceRecognizer_create() on the preprocessed dataset (output from Member 1).
+      * Tune LBPH parameters: radius, neighbors, grid_x, grid_y to find the best configuration.
+      * Save the trained model to a .yml file for inference.
+      2. Inference & matching
+      * Load trained model and run predict() on a live face ROI.
+      * Return predicted student ID and confidence score.
+      * Apply confidence threshold for match / no-match decision (lower confidence = better match in LBPH).
+      3. Module contract
+      * Input: standardized grayscale face ROI + student labels.
+      * Output: predicted student ID + confidence score + match status.
+
 
 **Documentation:**
-1. section 2.2  
-   - compare existing algo  
-2. section 3.3  
-   - Explain CBIR retrieval process  
-3. section 4.1  
-   - confusion matrix  
-4. section 4.2  
-   - Discuss why certain students are harder to match  
-5. section 1.3  
+1. Section 2.1
+   - Explain what are features in face recognition
+2. Section 2.2
+   - Compare LBPH with other feature extraction algorithms (HOG, Eigenfaces)
+3. Section 3.3
+   - Explain how LBPHFaceRecognizer works internally
+   - Describe parameter tuning process
+4. Section 1.2
+
 
 ---
+
+
+## Member 3: Data Augmentation & Evaluation
+
+
+**Coding Task:**
+      1. Data augmentation
+      * Use Albumentations library to expand dataset from 16-20 images to ~100 images per person.
+      * Apply augmentations that simulate real-world conditions:
+         - Brightness & contrast adjustments (simulate different lighting)
+         - Shadow overlays (simulate side lighting / backlight)
+         - Horizontal flips, rotations
+         - Gaussian blur & noise
+      2. Illumination robustness evaluation
+      * Test system accuracy under different lighting conditions:
+         Normal light, Low light, Backlight, Side lighting, Overexposure.
+      * Compare results with and without preprocessing (CLAHE, Histogram EQ, Gamma Correction).
+      * Present findings as a comparison table and chart.
+      3. Evaluation & metrics
+      * Set confidence threshold for match / no-match decision.
+      * Generate confusion matrix.
+      * Calculate FAR (False Acceptance Rate) and FRR (False Rejection Rate).
+      * Calculate Top-1 accuracy.
+
+
+**Documentation:**
+1. Section 2.2
+   - Compare augmentation techniques
+2. Section 3.2
+   - Describe dataset structure and augmentation process
+3. Section 4.1
+   - Confusion matrix, accuracy, FAR/FRR results
+4. Section 4.2
+   - Discuss illumination robustness findings
+   - Explain why certain lighting conditions are harder to handle
+5. Section 1.3
+
+
+---
+
 
 ## Member 4: Integration & System Management
 
+
 **Coding Task:**
-1. Database Management  
-2. Business Logic(Application Layer)  
-   - integrate member 1,2,3 's modules  
-   - Implement complete attendance workflow  
-   - Exception handling  
-3. user interface  
+1. Database Management
+      * Manage student records (IDs, names) and attendance logs (timestamp, predicted ID, confidence score, status).
+2. Business Logic (Application Layer)
+   - Integrate Member 1, 2, 3's modules.
+   - Implement complete attendance workflow.
+   - Exception handling.
+3. User Interface
+   - Build Streamlit UI for live attendance and registration.
+
 
 **Documentation:**
-1. section 3.1  
-   - Draw complete system architecture  
-   - Draw workflow flowchart  
-2. section 3.2  
-   - Describe your test dataset and data structure  
-3. section 4.1  
-   - UI screenshots showing successful  
-4. section 4.2  
-   - Overall system performance analysis  
-5. section 5  
-   - all
-
+1. Section 3.1
+   - Draw complete system architecture
+   - Draw workflow flowchart
+2. Section 3.2
+   - Describe test dataset and data structure
+3. Section 4.1
+   - UI screenshots showing successful attendance marking
+4. Section 4.2
+   - Overall system performance analysis
+5. Section 5
+   - All
