@@ -181,3 +181,6 @@ pyrightconfig.json
 
 /data
 /data/*
+
+# Large model files — exceed GitHub 100 MB limit
+models/*.yml
