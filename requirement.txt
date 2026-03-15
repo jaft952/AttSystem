@@ -27,6 +27,7 @@ imageio>=2.22.0
 
 # Additional face detection models (optional)
 mtcnn>=0.1.1
+mediapipe>=0.10.0
 
 # For better performance (optional)
 numba>=0.56.0
