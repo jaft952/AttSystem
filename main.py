@@ -429,6 +429,14 @@ def index():
     return render_template(
         "index.html",
         app_name="AttSystem",
+    )
+
+
+@APP.get("/training")
+def training():
+    return render_template(
+        "training.html",
+        app_name="AttSystem",
         threshold=ASSETS["threshold"],
         input_size=ASSETS["input_size"],
         model_name=ASSETS["model_path"].name,
@@ -451,8 +459,34 @@ def api_latest():
     return jsonify(CAMERA_SERVICE.get_latest())
 
 
+@APP.get("/training_api_latest")
+def training_api_latest():
+    ensure_camera_service()
+    return jsonify(CAMERA_SERVICE.get_latest())
+
+
 @APP.get("/video_feed")
 def video_feed():
+    ensure_camera_service()
+
+    def generate():
+        while True:
+            frame = CAMERA_SERVICE.get_frame()
+            if frame is None:
+                time.sleep(0.05)
+                continue
+
+            yield (
+                b"--frame\r\n"
+                b"Content-Type: image/jpeg\r\n\r\n" + frame + b"\r\n"
+            )
+            time.sleep(0.03)
+
+    return Response(generate(), mimetype="multipart/x-mixed-replace; boundary=frame")
+
+
+@APP.get("/training_video_feed")
+def training_video_feed():
     ensure_camera_service()
 
     def generate():
@@ -564,6 +598,25 @@ def api_retrain():
     try:
         result = retrain_runtime_model(include_feedback=True)
         return jsonify(result)
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
+@APP.post("/api/camera/stop")
+def api_camera_stop():
+    try:
+        if CAMERA_SERVICE.running:
+            CAMERA_SERVICE.stop()
+        return jsonify({"status": "ok", "message": "Camera stopped"})
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
+@APP.post("/api/camera/start")
+def api_camera_start():
+    try:
+        ensure_camera_service()
+        return jsonify({"status": "ok", "message": "Camera started"})
     except Exception as exc:
         return jsonify({"error": str(exc)}), 500
 

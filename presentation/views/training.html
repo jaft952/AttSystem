@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>{{ app_name }} | Reinforcement Training</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;700&display=swap"
+      rel="stylesheet"
+    />
+    <link
+      rel="stylesheet"
+      href="{{ url_for('static', filename='training.css') }}"
+    />
+  </head>
+  <body>
+    <main class="shell">
+      <section class="hero">
+        <div class="hero-copy">
+          <div class="hero-topline">
+            <p class="eyebrow">Model Reinforcement Training</p>
+          </div>
+          <h1>{{ app_name }}</h1>
+          <p class="lead">
+            Monitor the front camera, detect a face, recognize the identity with
+            the saved LBPH model, and provide feedback to improve the model in
+            real time.
+          </p>
+          <div class="stats">
+            <div class="stat-card">
+              <span class="stat-label">Model</span>
+              <strong>{{ model_name }}</strong>
+            </div>
+            <div class="stat-card">
+              <span class="stat-label">Threshold</span>
+              <strong>{{ threshold }}</strong>
+            </div>
+            <div class="stat-card">
+              <span class="stat-label">Input size</span>
+              <strong>{{ input_size[0] }} x {{ input_size[1] }}</strong>
+            </div>
+          </div>
+        </div>
+
+        <div class="camera-panel">
+          <div class="camera-frame">
+            <img
+              id="camera"
+              src="{{ url_for('training_video_feed') }}"
+              alt="Live camera feed"
+            />
+            <div class="camera-overlay">
+              <span class="pill live">Live</span>
+              <span class="pill mirror">Server stream</span>
+            </div>
+          </div>
+          <div class="camera-hint" id="cameraHint">
+            Streaming from the Flask backend.
+          </div>
+          <div class="camera-controls">
+            <button id="cameraToggle" class="button secondary" type="button">
+              Close Camera
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <aside class="side-panel">
+        <div class="result-card accent">
+          <span class="result-label">Predicted name</span>
+          <div id="predictedName" class="predicted-name">Waiting...</div>
+          <div id="predictedStatus" class="result-status">
+            No prediction yet
+          </div>
+        </div>
+
+        <div class="result-card">
+          <div class="metric-row">
+            <span>Confidence</span>
+            <strong id="confidenceValue">--</strong>
+          </div>
+          <div class="bar-shell">
+            <div id="confidenceBar" class="bar-fill"></div>
+          </div>
+          <div class="metric-row subtle">
+            <span>Threshold</span>
+            <strong>{{ threshold }}</strong>
+          </div>
+        </div>
+
+        <div class="result-card">
+          <div class="metric-row">
+            <span>Face box</span>
+            <strong id="bboxValue">--</strong>
+          </div>
+          <div class="metric-row subtle">
+            <span>Model</span>
+            <strong>{{ model_name }}</strong>
+          </div>
+          <div class="metric-row subtle">
+            <span>Input</span>
+            <strong>{{ input_size[0] }} x {{ input_size[1] }}</strong>
+          </div>
+        </div>
+
+        <div class="result-card feedback-card">
+          <div class="metric-row">
+            <span>Learning feedback</span>
+            <strong id="feedbackStatus">Idle</strong>
+          </div>
+
+          <label class="field-label" for="feedbackLabel">Correct label</label>
+          <select id="feedbackLabel" class="feedback-select">
+            <option value="">Select a person</option>
+            {% for label in label_names %}
+            <option value="{{ label }}">{{ label }}</option>
+            {% endfor %}
+          </select>
+
+          <div class="feedback-actions">
+            <button id="confirmBtn" class="button primary" type="button">
+              This is correct
+            </button>
+            <button id="correctBtn" class="button secondary" type="button">
+              Save correction
+            </button>
+          </div>
+
+          <button id="retrainBtn" class="button tertiary" type="button">
+            Retrain model from feedback
+          </button>
+
+          <p class="helper-note">
+            Confirm when the prediction is right. If it is wrong, pick the true
+            person and save the correction.
+          </p>
+        </div>
+      </aside>
+    </main>
+
+    <script>
+      window.APP_CONFIG = {
+        predictUrl: "{{ url_for('api_predict') }}",
+        latestUrl: "{{ url_for('training_api_latest') }}",
+        healthUrl: "{{ url_for('health') }}",
+        feedUrl: "{{ url_for('training_video_feed') }}",
+      };
+
+      // Camera toggle functionality
+      document.addEventListener("DOMContentLoaded", function () {
+        const cameraToggle = document.getElementById("cameraToggle");
+        const camera = document.getElementById("camera");
+        const cameraSource = window.APP_CONFIG.feedUrl;
+        let isCameraOpen = true;
+
+        cameraToggle.addEventListener("click", async function () {
+          isCameraOpen = !isCameraOpen;
+          cameraToggle.disabled = true;
+
+          try {
+            if (isCameraOpen) {
+              // Start the camera on backend
+              const response = await fetch("/api/camera/start", {
+                method: "POST",
+              });
+              if (response.ok) {
+                camera.src = cameraSource;
+                camera.style.display = "block";
+                cameraToggle.textContent = "Close Camera";
+              } else {
+                throw new Error("Failed to start camera");
+              }
+            } else {
+              // Stop the camera on backend
+              const response = await fetch("/api/camera/stop", {
+                method: "POST",
+              });
+              if (response.ok) {
+                camera.src = "";
+                camera.style.display = "none";
+                cameraToggle.textContent = "Open Camera";
+              } else {
+                throw new Error("Failed to stop camera");
+              }
+            }
+          } catch (error) {
+            console.error("Camera toggle error:", error);
+            isCameraOpen = !isCameraOpen; // Revert state on error
+          } finally {
+            cameraToggle.disabled = false;
+          }
+        });
+      });
+    </script>
+    <script src="{{ url_for('static', filename='training.js') }}"></script>
+  </body>
+</html>

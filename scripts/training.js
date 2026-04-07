@@ -9,8 +9,6 @@ const feedbackLabel = document.getElementById("feedbackLabel");
 const confirmBtn = document.getElementById("confirmBtn");
 const correctBtn = document.getElementById("correctBtn");
 const retrainBtn = document.getElementById("retrainBtn");
-const refreshBtn = document.getElementById("refreshBtn");
-const openFeedBtn = document.getElementById("openFeedBtn");
 
 const config = window.APP_CONFIG || {};
 let busy = false;
@@ -182,15 +180,9 @@ function startPolling() {
   latestTimer = setInterval(fetchLatest, 350);
 }
 
-refreshBtn.addEventListener("click", fetchLatest);
 confirmBtn.addEventListener("click", () => submitFeedback("confirm"));
 correctBtn.addEventListener("click", () => submitFeedback("correct"));
 retrainBtn.addEventListener("click", retrainModel);
-openFeedBtn.addEventListener("click", () => {
-  if (config.feedUrl) {
-    window.open(config.feedUrl, "_blank", "noopener,noreferrer");
-  }
-});
 window.addEventListener("beforeunload", () => {
   if (latestTimer) {
     clearInterval(latestTimer);

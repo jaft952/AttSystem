@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>{{ app_name }} | Live Face Recognition</title>
+    <title>{{ app_name }} | Attendance Checking</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -12,139 +12,14 @@
     />
     <link
       rel="stylesheet"
-      href="{{ url_for('static', filename='styles.css') }}"
+      href="{{ url_for('static', filename='index.css') }}"
     />
   </head>
   <body>
     <main class="shell">
-      <section class="hero">
-        <div class="hero-copy">
-          <p class="eyebrow">Live attendance recognition</p>
-          <h1>{{ app_name }}</h1>
-          <p class="lead">
-            Use the front camera to detect a face, recognize the identity with
-            the saved LBPH model, and display the result in real time.
-          </p>
-          <div class="stats">
-            <div class="stat-card">
-              <span class="stat-label">Model</span>
-              <strong>{{ model_name }}</strong>
-            </div>
-            <div class="stat-card">
-              <span class="stat-label">Threshold</span>
-              <strong>{{ threshold }}</strong>
-            </div>
-            <div class="stat-card">
-              <span class="stat-label">Input size</span>
-              <strong>{{ input_size[0] }} x {{ input_size[1] }}</strong>
-            </div>
-          </div>
-        </div>
-
-        <div class="camera-panel">
-          <div class="camera-frame">
-            <img
-              id="camera"
-              src="{{ url_for('video_feed') }}"
-              alt="Live camera feed"
-            />
-            <div class="camera-overlay">
-              <span class="pill live">Live</span>
-              <span class="pill mirror">Server stream</span>
-            </div>
-          </div>
-          <div class="camera-hint" id="cameraHint">
-            Streaming from the Flask backend.
-          </div>
-        </div>
-      </section>
-
-      <aside class="side-panel">
-        <div class="result-card accent">
-          <span class="result-label">Predicted name</span>
-          <div id="predictedName" class="predicted-name">Waiting...</div>
-          <div id="predictedStatus" class="result-status">
-            No prediction yet
-          </div>
-        </div>
-
-        <div class="result-card">
-          <div class="metric-row">
-            <span>Confidence</span>
-            <strong id="confidenceValue">--</strong>
-          </div>
-          <div class="bar-shell">
-            <div id="confidenceBar" class="bar-fill"></div>
-          </div>
-          <div class="metric-row subtle">
-            <span>Threshold</span>
-            <strong>{{ threshold }}</strong>
-          </div>
-        </div>
-
-        <div class="result-card">
-          <div class="metric-row">
-            <span>Face box</span>
-            <strong id="bboxValue">--</strong>
-          </div>
-          <div class="metric-row subtle">
-            <span>Model</span>
-            <strong>{{ model_name }}</strong>
-          </div>
-          <div class="metric-row subtle">
-            <span>Input</span>
-            <strong>{{ input_size[0] }} x {{ input_size[1] }}</strong>
-          </div>
-        </div>
-
-        <div class="result-card feedback-card">
-          <div class="metric-row">
-            <span>Learning feedback</span>
-            <strong id="feedbackStatus">Idle</strong>
-          </div>
-
-          <label class="field-label" for="feedbackLabel">Correct label</label>
-          <select id="feedbackLabel" class="feedback-select">
-            <option value="">Select a person</option>
-            {% for label in label_names %}
-            <option value="{{ label }}">{{ label }}</option>
-            {% endfor %}
-          </select>
-
-          <div class="feedback-actions">
-            <button id="confirmBtn" class="button primary" type="button">
-              This is correct
-            </button>
-            <button id="correctBtn" class="button secondary" type="button">
-              Save correction
-            </button>
-          </div>
-
-          <button id="retrainBtn" class="button tertiary" type="button">
-            Retrain model from feedback
-          </button>
-
-          <p class="helper-note">
-            Confirm when the prediction is right. If it is wrong, pick the true
-            person and save the correction.
-          </p>
-        </div>
-
-        <div class="result-card controls">
-          <button id="refreshBtn" class="button primary">Refresh status</button>
-          <button id="openFeedBtn" class="button secondary">Open feed</button>
-        </div>
-      </aside>
+      <h1>Attendance Checking</h1>
+      <!-- Placeholder for attendance checking webapp -->
     </main>
-
-    <script>
-      window.APP_CONFIG = {
-        predictUrl: "{{ url_for('api_predict') }}",
-        latestUrl: "{{ url_for('api_latest') }}",
-        healthUrl: "{{ url_for('health') }}",
-        feedUrl: "{{ url_for('video_feed') }}",
-      };
-    </script>
-    <script src="{{ url_for('static', filename='app.js') }}"></script>
+    <script src="{{ url_for('static', filename='index.js') }}"></script>
   </body>
 </html>
