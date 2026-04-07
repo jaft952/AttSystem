@@ -45,8 +45,8 @@ Put your raw images into:
 
 Example:
 
-- data/1_raw/harry/\*.jpg
-- data/1_raw/daniel/\*.jpg
+- data/1_raw/benjamin/\*.jpg
+- data/1_raw/chern_tak/\*.jpg
 
 Important:
 
