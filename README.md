@@ -1,193 +1,191 @@
-Objectives
-* To develop a Python-based face recognition attendance prototype that detects a face from a webcam frame, preprocesses it into a standardized ROI, and identifies the most similar enrolled student using LBPH face recognition.
-* To build and train an LBPHFaceRecognizer model using an augmented dataset, and evaluate its robustness under different real-world lighting conditions.
-* To evaluate the proposed system using quantitative metrics (e.g., Top-1 accuracy, FAR/FRR) and present results clearly.
+# AttSystem (LBPH Face Attendance)
 
+This project is a Flask-based attendance prototype with an LBPH face recognizer.
 
-Training steps:
-* Step 1: Data Collection & Augmentation
-Member 3 expands the raw dataset from 16-20 images to ~100 images per person using Albumentations, simulating different lighting conditions.
-* Step 2: Preprocessing
-The augmented dataset goes through Member 1's preprocessing pipeline (Face Detection, Crop, Resize, Grayscale, Illumination Normalization).
-* Step 3: Model Training
-Member 2 trains the LBPHFaceRecognizer model on the preprocessed dataset and tunes LBPH parameters (radius, neighbors, grid).
-* Step 4: Evaluation
-Member 3 evaluates the model under different lighting conditions and reports accuracy, FAR/FRR, and confusion matrix.
+Current architecture:
 
+- Camera stream: backend (OpenCV) via Flask MJPEG endpoint
+- Prediction + feedback + retraining: backend Python services
+- UI: web frontend in presentation/views and presentation/ui
+- Runtime model files: models/lbph_final.yml + models/realtime_model_config.json
 
-Notes from lecturer:
-* PCA removed — overengineered for this scenario.
-* Logistic Regression threshold removed — not suitable for live/real-world conditions (e.g., dark room).
-* Focus should be on demonstrating illumination robustness through image processing techniques.
-* LBPHFaceRecognizer is approved. Model has built-in similarity matching via confidence score.
-* Pre-trained weights are allowed as long as image processing techniques and algorithms are showcased.
-* 100 images per person confirmed for training.
-________________
+## Project Objective
 
+- Build a face recognition attendance flow using LBPH.
+- Improve robustness under different lighting conditions.
+- Support reinforcement feedback and runtime retraining.
 
-# System Architecture
-┌─────────────────────────────────────────────────────────┐
-│              Presentation Layer                         │
-│  - Streamlit UI                                         │
-│  - User input handling                                  │
-│  - Result display                                       │
-└────────────────────┬────────────────────────────────────┘
-                     │
-┌────────────────────▼────────────────────────────────────┐
-│             Application Layer                           │
-│  - AttendanceService                                    │
-│  - RegistrationService                                  │
-│  - Business logic & workflow orchestration              │
-└────────────────────┬────────────────────────────────────┘
-                     │
-┌────────────────────▼────────────────────────────────────┐
-│            Processing Layer                             │
-│  - FaceDetector (Member 1)                              │
-│  - LBPHModelTrainer (Member 2)                          │
-│  - AugmentationAndEvaluator (Member 3)                  │
-└────────────────────┬────────────────────────────────────┘
-                     │
-┌────────────────────▼────────────────────────────────────┐
-│              Data Layer                                 │
-│  - DatabaseManager (Member 4)                           │
-│  - File I/O operations                                  │
-│  - Data persistence (CSV, numpy files, .yml model)      │
-└─────────────────────────────────────────────────────────┘
+## Prerequisites
 
+- Windows (recommended for current camera capture path)
+- Python 3.11+
+- A working webcam
+- VS Code with Jupyter extension (for pipeline notebooks)
 
-________________
+## 1) Kick Start: Environment Setup
 
+From project root:
 
-## Member 1: Face Detection and Preprocessing
+```powershell
+# create venv (if not created yet)
+python -m venv .venv
 
+# activate venv
+.\.venv\Scripts\Activate.ps1
 
-**Coding Task:**
-      1. Preprocessing (before detection)
-      * Resize raw frame to a fixed input scale (e.g., width 640) to reduce computational load.
-      2. Face detection
-      * Use Haar Cascade Classifier (cv2.CascadeClassifier) or face_recognition library.
-      * Detect face bounding box from a raw image/frame.
-      * Run face detection every N frames (5-10 is best practice).
-      * Handle multi-face cases (select largest face or process all faces based on system mode).
-      3. Preprocessing (after detection)
-      * Crop face ROI with margin (padding) and boundary checking (prevent crashes).
-      * Convert to grayscale and resize to fixed size (e.g., 128×128) for mathematical consistency.
-      * Apply illumination normalization on face ROI:
-         - Histogram Equalization
-         - CLAHE (Contrast Limited Adaptive Histogram Equalization)
-         - Gamma Correction (for low-light / dark room scenarios)
-      4. Input/Output interface (module contract)
-      * Input: raw RGB/BGR image or camera frame.
-      * Output: standardized grayscale face image + detection metadata (bbox, confidence, status).
+# install dependencies
+python -m pip install -r requirement.txt
+```
 
+## 2) Prepare Raw Dataset (Baseline Input)
 
-**Documentation:**
-1. Section 2.2
-   - Compare face detection methods (Haar Cascade vs face_recognition vs YOLO)
-2. Section 3.3
-   - Describe preprocessing pipeline
-   - Explain illumination normalization techniques and why they are used
-3. Section 4.1
-   - Show detection success rate
-4. Section 1.1
+Put your raw images into:
 
+- data/1_raw/<person_name>/\*.jpg|png
 
----
+Example:
 
+- data/1_raw/harry/\*.jpg
+- data/1_raw/daniel/\*.jpg
 
-## Member 2: LBPH Model Training
+Important:
 
+- Keep one folder per identity.
+- Use clear face images with varied lighting and angles.
 
-**Coding Task:**
-      1. Model training
-      * Train cv2.face.LBPHFaceRecognizer_create() on the preprocessed dataset (output from Member 1).
-      * Tune LBPH parameters: radius, neighbors, grid_x, grid_y to find the best configuration.
-      * Save the trained model to a .yml file for inference.
-      2. Inference & matching
-      * Load trained model and run predict() on a live face ROI.
-      * Return predicted student ID and confidence score.
-      * Apply confidence threshold for match / no-match decision (lower confidence = better match in LBPH).
-      3. Module contract
-      * Input: standardized grayscale face ROI + student labels.
-      * Output: predicted student ID + confidence score + match status.
+## 3) Run ML Pipeline 1 -> 3 (Baseline + Final Runtime Model)
 
+Open and run these notebooks in order:
 
-**Documentation:**
-1. Section 2.1
-   - Explain what are features in face recognition
-2. Section 2.2
-   - Compare LBPH with other feature extraction algorithms (HOG, Eigenfaces)
-3. Section 3.3
-   - Explain how LBPHFaceRecognizer works internally
-   - Describe parameter tuning process
-4. Section 1.2
+1. ml/1_roi_pipeline.ipynb
+2. ml/2_augmentation_pipeline.ipynb
+3. ml/3_training_pipeline.ipynb
 
+Note: the file name is currently spelled 3_traininig_pipeline.ipynb.
 
----
+### Pipeline 1 output (ROI + preprocessing)
 
+Expected folders produced/updated:
 
-## Member 3: Data Augmentation & Evaluation
+- data/2_standarized
+- data/3_train
+- data/3_test
+- data/4_processed_train
+- data/4_processed_test
+- data/5_roi_train
+- data/5_roi_test
+- data/6_enhanced_roi_train
+- data/6_enhanced_roi_test
 
+### Pipeline 2 output (augmentation + final processed set)
 
-**Coding Task:**
-      1. Data augmentation
-      * Use Albumentations library to expand dataset from 16-20 images to ~100 images per person.
-      * Apply augmentations that simulate real-world conditions:
-         - Brightness & contrast adjustments (simulate different lighting)
-         - Shadow overlays (simulate side lighting / backlight)
-         - Horizontal flips, rotations
-         - Gaussian blur & noise
-      2. Illumination robustness evaluation
-      * Test system accuracy under different lighting conditions:
-         Normal light, Low light, Backlight, Side lighting, Overexposure.
-      * Compare results with and without preprocessing (CLAHE, Histogram EQ, Gamma Correction).
-      * Present findings as a comparison table and chart.
-      3. Evaluation & metrics
-      * Set confidence threshold for match / no-match decision.
-      * Generate confusion matrix.
-      * Calculate FAR (False Acceptance Rate) and FRR (False Rejection Rate).
-      * Calculate Top-1 accuracy.
+Expected folders produced/updated:
 
+- data/7_final_processed
+- data/7_augmented
 
-**Documentation:**
-1. Section 2.2
-   - Compare augmentation techniques
-2. Section 3.2
-   - Describe dataset structure and augmentation process
-3. Section 4.1
-   - Confusion matrix, accuracy, FAR/FRR results
-4. Section 4.2
-   - Discuss illumination robustness findings
-   - Explain why certain lighting conditions are harder to handle
-5. Section 1.3
+### Pipeline 3 output (LBPH models + runtime config)
 
+Expected files produced/updated:
 
----
+- models/lbph_model.yml
+- models/lbph_with_aug.yml
+- models/lbph_final.yml
+- models/realtime_model_config.json
 
+This is your initial baseline model path before reinforcement.
 
-## Member 4: Integration & System Management
+## 4) Run the Web App
 
+From project root:
 
-**Coding Task:**
-1. Database Management
-      * Manage student records (IDs, names) and attendance logs (timestamp, predicted ID, confidence score, status).
-2. Business Logic (Application Layer)
-   - Integrate Member 1, 2, 3's modules.
-   - Implement complete attendance workflow.
-   - Exception handling.
-3. User Interface
-   - Build Streamlit UI for live attendance and registration.
+```powershell
+.\.venv\Scripts\Activate.ps1
+python main.py
+```
 
+Open:
 
-**Documentation:**
-1. Section 3.1
-   - Draw complete system architecture
-   - Draw workflow flowchart
-2. Section 3.2
-   - Describe test dataset and data structure
-3. Section 4.1
-   - UI screenshots showing successful attendance marking
-4. Section 4.2
-   - Overall system performance analysis
-5. Section 5
-   - All
+- http://127.0.0.1:5000
+  or
+- http://192.168.1.82:5000
+
+Training/reinforcement page:
+
+- http://127.0.0.1:5000/training
+  or
+- http://192.168.1.82:5000/training
+
+## 5) Reinforcement Training (Feedback Loop)
+
+### A) Start training UI
+
+1. Go to /training page.
+2. Ensure camera stream is running.
+3. Watch live prediction status.
+
+### B) Save feedback samples
+
+Use either:
+
+- Confirm prediction (when predicted identity is correct)
+- Correct label (select the right label and save)
+
+Feedback data is stored in:
+
+- data/8_feedback/<label_name>/\*.jpg
+- data/8_feedback/<label_name>/\*.json
+
+### C) Retrain runtime model
+
+1. Click Retrain model now.
+2. Camera is paused automatically during retraining.
+3. When retraining completes, camera resumes.
+4. Updated model is written to models/lbph_final.yml and runtime config is refreshed.
+
+## 6) Clean Up Feedback (Optional)
+
+If you are done with reinforcement and do not need history, you can remove:
+
+- data/8_feedback
+
+Warning:
+
+- Deleting it removes all reinforcement samples permanently.
+- Future retraining will only use baseline datasets unless new feedback is collected.
+
+## 7) Troubleshooting
+
+### App exits after retrain
+
+- Run only one server instance at a time.
+- Start app with:
+
+```powershell
+python main.py
+```
+
+- Confirm health endpoint from another terminal:
+
+```powershell
+Invoke-WebRequest -UseBasicParsing http://127.0.0.1:5000/api/health | Select-Object -ExpandProperty Content
+```
+
+### No face samples saved for feedback
+
+- Keep your face in frame before pressing confirm/correct.
+- If no ROI is available, the app rejects feedback to avoid bad labels.
+
+### Camera issues
+
+- Ensure webcam is not locked by another app.
+- Restart app and reopen /training.
+
+## Key Paths
+
+- App entry: main.py
+- Training backend service: ml/reinforcement_pipeline.py
+- Camera service: service/camera_service.py
+- Training UI script: presentation/ui/training.js
+- Training page: presentation/views/training.html
+- Runtime model config: models/realtime_model_config.json

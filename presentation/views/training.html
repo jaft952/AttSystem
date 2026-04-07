@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>{{ app_name }} | Developer Reinforcement Console</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;700&display=swap"
+      rel="stylesheet"
+    />
+    <link
+      rel="stylesheet"
+      href="{{ url_for('static', filename='training.css') }}"
+    />
+  </head>
+  <body>
+    <main class="shell">
+      <section class="hero">
+        <div class="hero-copy">
+          <div class="hero-topline">
+            <p class="eyebrow">Developer Tools · Model Reinforcement</p>
+            <a class="button secondary nav-home" href="{{ url_for('index') }}">
+              Back to Attendance App
+            </a>
+          </div>
+          <h1>Reinforcement Console</h1>
+          <p class="lead">
+            This page is for developers and maintainers to reinforce the
+            identity model. Every confirmation, correction, and retraining
+            action changes model behavior and can directly impact production
+            recognition quality.
+          </p>
+          <div class="danger-banner" role="alert" aria-live="polite">
+            <strong>Warning:</strong> operations here are high-impact and not
+            reversible from this UI. Proceed only when you trust the camera
+            input and selected labels.
+          </div>
+          <div class="stats stats-dev">
+            <div class="stat-card">
+              <span class="stat-label">Runtime model</span>
+              <strong>{{ model_name }}</strong>
+            </div>
+            <div class="stat-card">
+              <span class="stat-label">Confidence threshold</span>
+              <strong>{{ threshold }}</strong>
+            </div>
+            <div class="stat-card">
+              <span class="stat-label"
+                >ROI input <br />
+                size</span
+              >
+              <strong>{{ input_size[0] }} x {{ input_size[1] }}</strong>
+            </div>
+          </div>
+          <ul class="risk-points">
+            <li>Wrong labels permanently pollute feedback samples.</li>
+            <li>Retraining can shift model decision boundaries immediately.</li>
+            <li>No rollback button exists on this page.</li>
+          </ul>
+        </div>
+
+        <div class="camera-panel">
+          <div class="camera-frame">
+            <img id="cameraVideo" alt="Live camera stream" />
+            <canvas id="cameraOverlay" aria-hidden="true"></canvas>
+            <div
+              id="retrainOverlay"
+              class="retrain-overlay hidden"
+              aria-live="polite"
+            >
+              <div class="loader" aria-hidden="true"></div>
+              <p id="retrainOverlayText">Retraining in progress...</p>
+            </div>
+          </div>
+          <div class="camera-controls">
+            <button id="cameraToggle" class="button secondary" type="button">
+              Close Camera
+            </button>
+          </div>
+          <p id="cameraHint" class="camera-hint">Loading backend stream...</p>
+        </div>
+      </section>
+
+      <aside class="side-panel">
+        <div class="result-card warning-card">
+          <span class="result-label">Safety checklist</span>
+          <ul class="checklist">
+            <li>Verify person identity before confirming labels.</li>
+            <li>Use correction only with known ground truth.</li>
+            <li>Retrain after collecting enough valid samples.</li>
+          </ul>
+        </div>
+
+        <div class="result-card accent">
+          <span class="result-label">Current prediction</span>
+          <div id="predictedName" class="predicted-name">Waiting...</div>
+          <div id="predictedStatus" class="result-status">
+            No prediction yet
+          </div>
+        </div>
+
+        <div class="result-card">
+          <div class="metric-row">
+            <span>Confidence</span>
+            <strong id="confidenceValue">--</strong>
+          </div>
+          <div class="bar-shell">
+            <div id="confidenceBar" class="bar-fill"></div>
+          </div>
+          <div class="metric-row subtle">
+            <span>Threshold</span>
+            <strong>{{ threshold }}</strong>
+          </div>
+        </div>
+
+        <div class="result-card">
+          <div class="metric-row">
+            <span>Face box</span>
+            <strong id="bboxValue">--</strong>
+          </div>
+          <div class="metric-row subtle">
+            <span>Model</span>
+            <strong>{{ model_name }}</strong>
+          </div>
+          <div class="metric-row subtle">
+            <span>Input</span>
+            <strong>{{ input_size[0] }} x {{ input_size[1] }}</strong>
+          </div>
+        </div>
+
+        <div class="result-card feedback-card">
+          <div class="metric-row">
+            <span>Reinforcement status</span>
+            <strong id="feedbackStatus">Idle</strong>
+          </div>
+
+          <label class="field-label" for="feedbackLabel"
+            >Verified identity label</label
+          >
+          <select id="feedbackLabel" class="feedback-select">
+            <option value="">Select a person</option>
+            {% for label in label_names %}
+            <option value="{{ label }}">{{ label }}</option>
+            {% endfor %}
+          </select>
+
+          <div class="feedback-actions">
+            <button id="confirmBtn" class="button primary" type="button">
+              Confirm prediction
+            </button>
+            <button id="correctBtn" class="button secondary" type="button">
+              Correct label
+            </button>
+          </div>
+
+          <button id="retrainBtn" class="button tertiary" type="button">
+            Retrain model now
+          </button>
+
+          <p class="helper-note">
+            Only retrain after reviewing recent corrections. Poor-quality
+            feedback may degrade prediction performance for everyone.
+          </p>
+        </div>
+      </aside>
+    </main>
+
+    <script>
+      window.APP_CONFIG = {
+        predictUrl: "{{ url_for('api_predict') }}",
+        healthUrl: "{{ url_for('health') }}",
+        latestUrl: "{{ url_for('api_latest') }}",
+        retrainUrl: "{{ url_for('api_retrain') }}",
+        retrainStatusUrl: "{{ url_for('api_retrain_status') }}",
+        videoFeedUrl: "{{ url_for('video_feed') }}",
+        cameraStartUrl: "{{ url_for('api_camera_start') }}",
+        cameraStopUrl: "{{ url_for('api_camera_stop') }}",
+      };
+    </script>
+    <script src="{{ url_for('static', filename='training.js') }}"></script>
+  </body>
+</html>
