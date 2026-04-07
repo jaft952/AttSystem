@@ -61,8 +61,6 @@ Open and run these notebooks in order:
 2. ml/2_augmentation_pipeline.ipynb
 3. ml/3_training_pipeline.ipynb
 
-Note: the file name is currently spelled 3_traininig_pipeline.ipynb.
-
 ### Pipeline 1 output (ROI + preprocessing)
 
 Expected folders produced/updated:
