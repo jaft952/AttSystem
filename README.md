@@ -16,12 +16,12 @@ A Flask-based attendance prototype powered by an LBPH face recognizer, with live
 
 ## 📋 Prerequisites
 
-| Requirement | Details |
-|---|---|
-| OS | Windows (recommended) |
-| Python | 3.11+ |
-| Webcam | Working USB or built-in camera |
-| IDE | VS Code + Jupyter extension (for pipeline notebooks) |
+| Requirement | Details                                              |
+| ----------- | ---------------------------------------------------- |
+| OS          | Windows (recommended)                                |
+| Python      | 3.11+                                                |
+| Webcam      | Working USB or built-in camera                       |
+| IDE         | VS Code + Jupyter extension (for pipeline notebooks) |
 
 ---
 
@@ -59,11 +59,11 @@ data/
 
 Open and run these notebooks **in order**:
 
-| Step | Notebook | Output |
-|---|---|---|
-| 1 | `ml/1_roi_pipeline.ipynb` | ROI + preprocessed images (`data/2_*` through `data/6_*`) |
-| 2 | `ml/2_augmentation_pipeline.ipynb` | Augmented final set (`data/7_*`) |
-| 3 | `ml/3_training_pipeline.ipynb` | LBPH models + runtime config (`models/`) |
+| Step | Notebook                           | Output                                                    |
+| ---- | ---------------------------------- | --------------------------------------------------------- |
+| 1    | `ml/1_roi_pipeline.ipynb`          | ROI + preprocessed images (`data/2_*` through `data/6_*`) |
+| 2    | `ml/2_augmentation_pipeline.ipynb` | Augmented final set (`data/7_*`)                          |
+| 3    | `ml/3_training_pipeline.ipynb`     | LBPH models + runtime config (`models/`)                  |
 
 After pipeline 3, you'll have:
 
@@ -82,9 +82,9 @@ models/
 python main.py
 ```
 
-| Page | URL |
-|---|---|
-| Attendance | http://127.0.0.1:5000 |
+| Page                     | URL                            |
+| ------------------------ | ------------------------------ |
+| Attendance               | http://127.0.0.1:5000          |
 | Training / Reinforcement | http://127.0.0.1:5000/training |
 
 > Also accessible on your local network at `http://192.168.1.82:5000`.
@@ -101,6 +101,7 @@ python main.py
    - ✏️ **Correct label** — select the right label and save
 
    Feedback is saved to:
+
    ```
    data/8_feedback/<label_name>/*.jpg
    data/8_feedback/<label_name>/*.json
@@ -132,30 +133,33 @@ Verify the health endpoint in another terminal:
 ```powershell
 Invoke-WebRequest -UseBasicParsing http://127.0.0.1:5000/api/health | Select-Object -ExpandProperty Content
 ```
+
 </details>
 
 <details>
 <summary><strong>No face samples saved for feedback</strong></summary>
 
 Keep your face in frame before pressing Confirm or Correct. If no ROI is detected, the app rejects the feedback to avoid bad labels.
+
 </details>
 
 <details>
 <summary><strong>Camera not working</strong></summary>
 
 Ensure the webcam is not being used by another application. Restart the app and reopen `/training`.
+
 </details>
 
 ---
 
 ## 📁 Key Paths
 
-| Path | Description |
-|---|---|
-| `main.py` | App entry point |
-| `ml/reinforcement_pipeline.py` | Retraining backend service |
-| `service/camera_service.py` | Camera stream service |
-| `presentation/views/training.html` | Training page template |
-| `presentation/ui/training.js` | Training UI script |
-| `models/lbph_final.yml` | Runtime face recognition model |
-| `models/realtime_model_config.json` | Runtime model configuration |
+| Path                                | Description                    |
+| ----------------------------------- | ------------------------------ |
+| `main.py`                           | App entry point                |
+| `ml/reinforcement_pipeline.py`      | Retraining backend service     |
+| `service/camera_service.py`         | Camera stream service          |
+| `presentation/views/training.html`  | Training page template         |
+| `scripts/training.js`               | Training UI script             |
+| `models/lbph_final.yml`             | Runtime face recognition model |
+| `models/realtime_model_config.json` | Runtime model configuration    |

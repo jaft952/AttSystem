@@ -1,5 +1,5 @@
 from pathlib import Path
-from flask import Flask, Response, jsonify, render_template, request
+from flask import Flask, Response, jsonify, render_template, request, send_from_directory
 
 from ml import reinforcement_pipeline as training_service
 
@@ -7,8 +7,14 @@ from ml import reinforcement_pipeline as training_service
 PROJECT_ROOT = Path(__file__).resolve().parent
 VIEWS_ROOT = PROJECT_ROOT / "presentation" / "views"
 UI_ROOT = PROJECT_ROOT / "presentation" / "ui"
+SCRIPTS_ROOT = PROJECT_ROOT / "scripts"
 
 APP = Flask(__name__, template_folder=str(VIEWS_ROOT), static_folder=str(UI_ROOT), static_url_path="/ui")
+
+
+@APP.get("/scripts/<path:filename>")
+def script_asset(filename: str):
+    return send_from_directory(str(SCRIPTS_ROOT), filename)
 
 
 @APP.get("/")

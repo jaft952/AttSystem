@@ -4,6 +4,11 @@ const confidenceValue = document.getElementById("confidenceValue");
 const confidenceBar = document.getElementById("confidenceBar");
 const bboxValue = document.getElementById("bboxValue");
 const cameraHint = document.getElementById("cameraHint");
+const cameraVideo = document.getElementById("cameraVideo");
+const cameraOverlay = document.getElementById("cameraOverlay");
+const cameraToggle = document.getElementById("cameraToggle");
+const retrainOverlay = document.getElementById("retrainOverlay");
+const retrainOverlayText = document.getElementById("retrainOverlayText");
 const feedbackStatus = document.getElementById("feedbackStatus");
 const feedbackLabel = document.getElementById("feedbackLabel");
 const confirmBtn = document.getElementById("confirmBtn");
@@ -11,11 +16,24 @@ const correctBtn = document.getElementById("correctBtn");
 const retrainBtn = document.getElementById("retrainBtn");
 
 const config = window.APP_CONFIG || {};
-let busy = false;
 let actionBusy = false;
+let retrainTimer = null;
+let retraining = false;
+let cameraRunning = false;
 let latestTimer = null;
+let busy = false;
 
 function setPredictionState(name, status, confidence, bbox) {
+  if (
+    !predictedName ||
+    !predictedStatus ||
+    !confidenceValue ||
+    !confidenceBar ||
+    !bboxValue
+  ) {
+    return;
+  }
+
   predictedName.textContent = name || "Waiting...";
   predictedStatus.textContent = status || "No prediction yet";
   confidenceValue.textContent =
@@ -40,11 +58,87 @@ function setFeedbackState(message) {
   }
 }
 
-function toggleActionButtons(disabled) {
-  if (confirmBtn) confirmBtn.disabled = disabled;
-  if (correctBtn) correctBtn.disabled = disabled;
-  if (retrainBtn) retrainBtn.disabled = disabled;
-  if (feedbackLabel) feedbackLabel.disabled = disabled;
+function setRetrainOverlay(visible, message) {
+  if (!retrainOverlay) {
+    return;
+  }
+
+  retrainOverlay.classList.toggle("hidden", !visible);
+  if (retrainOverlayText && message) {
+    retrainOverlayText.textContent = message;
+  }
+}
+
+function setCameraHint(message) {
+  if (cameraHint) {
+    cameraHint.textContent = message;
+  }
+}
+
+function parseApiError(data, fallback) {
+  return data && data.error ? data.error : fallback;
+}
+
+async function readJson(response) {
+  try {
+    return await response.json();
+  } catch (_) {
+    return {};
+  }
+}
+
+function drawOverlayBbox(bbox, sourceWidth, sourceHeight) {
+  if (!cameraOverlay || !cameraVideo) {
+    return;
+  }
+
+  const displayWidth = cameraVideo.clientWidth;
+  const displayHeight = cameraVideo.clientHeight;
+  if (!displayWidth || !displayHeight) {
+    return;
+  }
+
+  cameraOverlay.width = displayWidth;
+  cameraOverlay.height = displayHeight;
+  const ctx = cameraOverlay.getContext("2d");
+  if (!ctx) {
+    return;
+  }
+
+  ctx.clearRect(0, 0, displayWidth, displayHeight);
+  if (!bbox || !sourceWidth || !sourceHeight) {
+    return;
+  }
+
+  const scale = Math.min(
+    displayWidth / sourceWidth,
+    displayHeight / sourceHeight,
+  );
+  const offsetX = (displayWidth - sourceWidth * scale) / 2;
+  const offsetY = (displayHeight - sourceHeight * scale) / 2;
+
+  const x = offsetX + bbox.x * scale;
+  const y = offsetY + bbox.y * scale;
+  const w = bbox.w * scale;
+  const h = bbox.h * scale;
+
+  ctx.strokeStyle = "#f7f7f7";
+  ctx.lineWidth = 2;
+  ctx.strokeRect(x, y, w, h);
+}
+
+function stopPolling() {
+  if (latestTimer) {
+    clearInterval(latestTimer);
+    latestTimer = null;
+  }
+  busy = false;
+}
+
+function startPolling() {
+  stopPolling();
+  fetchLatest();
+  latestTimer = setInterval(fetchLatest, 350);
 }
 
 async function fetchLatest() {
@@ -89,21 +183,82 @@ async function fetchLatest() {
     }
 
     if (data.running) {
-      cameraHint.textContent = `Backend stream active. Frames processed: ${data.frame_count || 0}`;
-    } else {
-      cameraHint.textContent = "Camera stream is not running.";
+      setCameraHint(
+        `Backend stream active. Frames processed: ${data.frame_count || 0}`,
+      );
+    } else if (!retraining) {
+      setCameraHint("Camera stream is not running.");
     }
   } catch (error) {
     console.error(error);
     setPredictionState("Error", error.message, null, null);
-    cameraHint.textContent = error.message;
+    setCameraHint(error.message);
   } finally {
     busy = false;
   }
 }
 
+async function startCameraStream() {
+  if (!cameraVideo || !config.videoFeedUrl || !config.cameraStartUrl) {
+    return;
+  }
+
+  cameraToggle.disabled = true;
+
+  try {
+    const response = await fetch(config.cameraStartUrl, { method: "POST" });
+    const data = await readJson(response);
+    if (!response.ok) {
+      throw new Error(parseApiError(data, "Could not start camera"));
+    }
+
+    cameraRunning = true;
+    cameraVideo.src = `${config.videoFeedUrl}?t=${Date.now()}`;
+    cameraToggle.textContent = "Close Camera";
+    setCameraHint("Backend camera active. Running low-latency predictions.");
+    startPolling();
+  } catch (error) {
+    console.error(error);
+    cameraRunning = false;
+    setCameraHint(error.message || "Camera access failed.");
+    cameraToggle.textContent = "Open Camera";
+  } finally {
+    cameraToggle.disabled = retraining;
+  }
+}
+
+async function stopCameraStream({ fromRetrain = false } = {}) {
+  if (!cameraVideo || !config.cameraStopUrl) {
+    return;
+  }
+
+  try {
+    await fetch(config.cameraStopUrl, { method: "POST" });
+  } catch (error) {
+    console.error(error);
+  }
+
+  cameraRunning = false;
+  cameraVideo.removeAttribute("src");
+  cameraVideo.src = "";
+  cameraToggle.textContent = "Open Camera";
+  stopPolling();
+  drawOverlayBbox(null, 0, 0);
+  if (!fromRetrain) {
+    setCameraHint("Camera stream is paused.");
+    setPredictionState("Waiting...", "Camera paused.", null, null);
+  }
+}
+
+function toggleActionButtons(disabled) {
+  if (confirmBtn) confirmBtn.disabled = disabled;
+  if (correctBtn) correctBtn.disabled = disabled;
+  if (retrainBtn) retrainBtn.disabled = disabled;
+  if (feedbackLabel) feedbackLabel.disabled = disabled;
+}
+
 async function submitFeedback(action) {
-  if (actionBusy || !config.latestUrl) {
+  if (actionBusy || retraining) {
     return;
   }
 
@@ -122,13 +277,12 @@ async function submitFeedback(action) {
       body: JSON.stringify(payload),
     });
 
-    const data = await response.json();
+    const data = await readJson(response);
     if (!response.ok) {
-      throw new Error(data.error || "Could not save feedback");
+      throw new Error(parseApiError(data, "Could not save feedback"));
     }
 
     setFeedbackState(`Saved: ${data.saved_label}`);
-    await fetchLatest();
   } catch (error) {
     console.error(error);
     setFeedbackState(error.message);
@@ -145,50 +299,189 @@ async function retrainModel() {
 
   actionBusy = true;
   toggleActionButtons(true);
-  setFeedbackState("Retraining model...");
+  retraining = true;
+  setRetrainOverlay(true, "Retraining model... this can take a while");
+  if (cameraToggle) {
+    cameraToggle.disabled = true;
+  }
+  setFeedbackState("Retraining started. Camera is paused to save resources.");
+  setPredictionState(
+    "Retraining...",
+    "Camera paused. Model update is running in background.",
+    null,
+    null,
+  );
+  await stopCameraStream({ fromRetrain: true });
 
   try {
-    const response = await fetch("/api/retrain", {
+    const response = await fetch(config.retrainUrl, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
     });
-    const data = await response.json();
+    const data = await readJson(response);
 
     if (!response.ok) {
-      throw new Error(data.error || "Retraining failed");
+      throw new Error(parseApiError(data, "Could not start retraining"));
     }
 
-    setFeedbackState(
-      `Retrained: ${data.training_samples} samples (${data.feedback_samples} feedback)`,
-    );
-    await fetchLatest();
+    if (data.status !== "started" && data.status !== "running") {
+      throw new Error("Unexpected retraining response from backend.");
+    }
+
+    setFeedbackState("Retraining in progress...");
+    startRetrainPolling();
   } catch (error) {
     console.error(error);
     setFeedbackState(error.message);
-  } finally {
+    retraining = false;
     actionBusy = false;
     toggleActionButtons(false);
+    setRetrainOverlay(false, "");
+    await startCameraStream();
+  } finally {
+    if (!retraining && cameraToggle) {
+      cameraToggle.disabled = false;
+    }
   }
 }
 
-function startPolling() {
-  if (latestTimer) {
-    clearInterval(latestTimer);
+function startRetrainPolling() {
+  if (retrainTimer) {
+    clearInterval(retrainTimer);
   }
 
-  fetchLatest();
-  latestTimer = setInterval(fetchLatest, 350);
+  pollRetrainStatus();
+  retrainTimer = setInterval(pollRetrainStatus, 1000);
 }
 
-confirmBtn.addEventListener("click", () => submitFeedback("confirm"));
-correctBtn.addEventListener("click", () => submitFeedback("correct"));
-retrainBtn.addEventListener("click", retrainModel);
+async function pollRetrainStatus() {
+  if (!config.retrainStatusUrl) {
+    return;
+  }
+
+  try {
+    const response = await fetch(config.retrainStatusUrl, {
+      cache: "no-store",
+    });
+    const data = await readJson(response);
+    if (!response.ok) {
+      throw new Error(parseApiError(data, "Could not read retraining status"));
+    }
+
+    if (data.status === "running") {
+      const startedAt = data.started_at ? Date.parse(data.started_at) : null;
+      const elapsed =
+        startedAt && Number.isFinite(startedAt)
+          ? Math.max(0, Math.floor((Date.now() - startedAt) / 1000))
+          : null;
+      const elapsedText = elapsed === null ? "" : ` (${elapsed}s)`;
+      setRetrainOverlay(
+        true,
+        `Retraining model in background${elapsedText}. Camera stays paused.`,
+      );
+      return;
+    }
+
+    if (data.status === "completed") {
+      const result = data.result || {};
+      setFeedbackState(
+        `Retrained: ${result.training_samples || 0} samples (${result.feedback_samples || 0} feedback)`,
+      );
+      await finalizeRetraining();
+      return;
+    }
+
+    if (data.status === "failed") {
+      setFeedbackState(data.error || "Retraining failed.");
+      await finalizeRetraining();
+    }
+  } catch (error) {
+    console.error(error);
+    if (error && error.message === "Failed to fetch") {
+      setFeedbackState("Connection interrupted. Retrying retrain status...");
+      return;
+    }
+    setFeedbackState(error.message);
+  }
+}
+
+async function finalizeRetraining() {
+  if (retrainTimer) {
+    clearInterval(retrainTimer);
+    retrainTimer = null;
+  }
+
+  retraining = false;
+  actionBusy = false;
+  setRetrainOverlay(false, "");
+  toggleActionButtons(false);
+  await startCameraStream();
+}
+
+async function syncRetrainStateOnLoad() {
+  if (!config.retrainStatusUrl) {
+    return;
+  }
+  try {
+    const response = await fetch(config.retrainStatusUrl, {
+      cache: "no-store",
+    });
+    const data = await readJson(response);
+    if (!response.ok) {
+      return;
+    }
+    if (data.status === "running") {
+      retraining = true;
+      actionBusy = true;
+      toggleActionButtons(true);
+      setRetrainOverlay(true, "Retraining model... this can take a while");
+      if (cameraToggle) {
+        cameraToggle.disabled = true;
+      }
+      await stopCameraStream({ fromRetrain: true });
+      setFeedbackState("Retraining in progress...");
+      startRetrainPolling();
+    }
+  } catch (error) {
+    console.error(error);
+  }
+}
+
+if (cameraToggle) {
+  cameraToggle.addEventListener("click", async () => {
+    if (retraining) {
+      return;
+    }
+    if (cameraRunning) {
+      await stopCameraStream();
+    } else {
+      await startCameraStream();
+    }
+  });
+}
+if (confirmBtn)
+  confirmBtn.addEventListener("click", () => submitFeedback("confirm"));
+if (correctBtn)
+  correctBtn.addEventListener("click", () => submitFeedback("correct"));
+if (retrainBtn) retrainBtn.addEventListener("click", retrainModel);
+
 window.addEventListener("beforeunload", () => {
-  if (latestTimer) {
-    clearInterval(latestTimer);
+  stopPolling();
+  if (cameraRunning) {
+    fetch(config.cameraStopUrl || "/api/camera/stop", {
+      method: "POST",
+      keepalive: true,
+    }).catch(() => {});
+  }
+  if (retrainTimer) {
+    clearInterval(retrainTimer);
   }
 });
 
-setPredictionState("Waiting...", "Loading backend stream...", null, null);
+setPredictionState("Waiting...", "Starting backend camera...", null, null);
 setFeedbackState("Ready");
-startPolling();
+syncRetrainStateOnLoad().then(() => {
+  if (!retraining) {
+    startCameraStream();
+  }
+});
