@@ -28,6 +28,27 @@ CLIENT_SAMPLE_LOCK = threading.Lock()
 
 FEEDBACK_ROOT.mkdir(parents=True, exist_ok=True)
 
+DEFAULT_ACCEPTANCE_THRESHOLD = 160.0
+DEFAULT_STRICT_UNKNOWN_THRESHOLD = 100.0
+
+
+def resolve_strict_unknown_threshold(runtime_config: dict[str, Any], acceptance_threshold: float) -> float:
+    raw_value = runtime_config.get("identity_strict_unknown_threshold")
+    if raw_value is None:
+        strict_threshold = min(acceptance_threshold, DEFAULT_STRICT_UNKNOWN_THRESHOLD)
+    else:
+        try:
+            strict_threshold = float(raw_value)
+        except (TypeError, ValueError):
+            strict_threshold = min(acceptance_threshold, DEFAULT_STRICT_UNKNOWN_THRESHOLD)
+
+    if strict_threshold <= 0:
+        strict_threshold = min(acceptance_threshold, DEFAULT_STRICT_UNKNOWN_THRESHOLD)
+
+    # Strict threshold must never be looser than acceptance and never exceed
+    # the hard unknown gate, even if config is set too high.
+    return min(strict_threshold, acceptance_threshold, DEFAULT_STRICT_UNKNOWN_THRESHOLD)
+
 
 def create_lbph_recognizer() -> Any:
     face_module = getattr(cv2, "face", None)
@@ -65,7 +86,8 @@ def load_runtime_assets() -> dict[str, Any]:
 
     model_path = Path(runtime_config["identity_model"])
     label_map_path = Path(runtime_config["identity_label_map"])
-    threshold = float(runtime_config.get("identity_confidence_threshold", 160.0))
+    threshold = float(runtime_config.get("identity_confidence_threshold", DEFAULT_ACCEPTANCE_THRESHOLD))
+    strict_unknown_threshold = resolve_strict_unknown_threshold(runtime_config, threshold)
     input_size = tuple(runtime_config.get("input_size", [128, 128]))
 
     recognizer = create_lbph_recognizer()
@@ -80,6 +102,7 @@ def load_runtime_assets() -> dict[str, Any]:
         "model_path": model_path,
         "label_map_path": label_map_path,
         "threshold": threshold,
+        "strict_unknown_threshold": strict_unknown_threshold,
         "input_size": input_size,
         "recognizer": recognizer,
         "label_map": label_map,
@@ -295,15 +318,17 @@ def get_health_payload() -> dict[str, Any]:
 
 
 def get_latest_payload() -> dict[str, Any]:
-    ensure_camera_service()
     payload = CAMERA_SERVICE.get_latest()
     payload["retraining"] = get_retrain_status()
     return payload
 
 
 def stream_frames():
-    ensure_camera_service()
     while True:
+        if not CAMERA_SERVICE.running:
+            time.sleep(0.05)
+            continue
+
         frame = CAMERA_SERVICE.get_frame()
         if frame is None:
             time.sleep(0.05)
@@ -557,11 +582,12 @@ def predict_face(face_roi: np.ndarray) -> dict[str, Any]:
         recognizer = ASSETS["recognizer"]
         label_map = ASSETS["label_map"]
         threshold = float(ASSETS["threshold"])
+        strict_unknown_threshold = float(ASSETS.get("strict_unknown_threshold", threshold))
 
         label_id, confidence = recognizer.predict(face_roi)
 
     raw_name = label_map.get(int(label_id), "unknown")
-    accepted = float(confidence) <= threshold
+    accepted = float(confidence) <= strict_unknown_threshold
     display_name = raw_name if accepted else "unknown"
 
     return {
@@ -570,6 +596,8 @@ def predict_face(face_roi: np.ndarray) -> dict[str, Any]:
         "name": display_name,
         "confidence": float(confidence),
         "accepted": bool(accepted),
+        "acceptance_threshold": float(threshold),
+        "strict_unknown_threshold": float(strict_unknown_threshold),
     }
 
 
@@ -673,7 +701,12 @@ def retrain_with_feedback_async() -> dict[str, Any]:
 
 
 def start_camera() -> dict[str, Any]:
-    ensure_camera_service()
+    if is_retraining_running():
+        return {"status": "error", "message": "Camera is paused during retraining."}
+
+    if not CAMERA_SERVICE.running:
+        CAMERA_SERVICE.start()
+
     return {"status": "ok", "message": "Camera started"}
 
 

@@ -2,6 +2,7 @@
   "identity_model": "C:\\Users\\harry\\Documents\\school\\ip\\AttSystem\\models\\lbph_final.yml",
   "identity_label_map": "c:\\Users\\harry\\Documents\\school\\ip\\AttSystem\\models\\label_map.txt",
   "identity_confidence_threshold": 160.0,
+  "identity_strict_unknown_threshold": 100.0,
   "input_size": [
     128,
     128

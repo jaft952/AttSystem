@@ -306,7 +306,7 @@ h1 {
 }
 
 #cameraVideo {
-  object-fit: contain;
+  object-fit: cover;
   background: #000;
 }
 
