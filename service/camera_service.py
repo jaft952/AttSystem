@@ -66,13 +66,13 @@ class CameraService:
 
     def stop(self):
         self.running = False
-        if self.thread is not None and self.thread.is_alive():
-            self.thread.join(timeout=1.0)
-        self.thread = None
-
         if self.capture is not None:
             self.capture.release()
             self.capture = None
+
+        if self.thread is not None and self.thread.is_alive():
+            self.thread.join(timeout=1.0)
+        self.thread = None
 
         with self.lock:
             self.frame_bytes = None

@@ -17,9 +17,83 @@
   </head>
   <body>
     <main class="shell">
-      <h1>Attendance Checking</h1>
-      <!-- Placeholder for attendance checking webapp -->
+      <section class="panel camera-panel">
+        <header class="panel-head">
+          <p class="eyebrow">Live Attendance</p>
+          <h1>Attendance Checking</h1>
+          <p id="todayDate" class="today">{{ today_date }}</p>
+        </header>
+
+        <div class="camera-frame">
+          <img id="cameraVideo" alt="Live camera stream" />
+        </div>
+
+        <div class="identified">
+          <p class="kicker">Detected person</p>
+          <p id="identifiedName" class="name">Waiting...</p>
+          <p id="identifiedStatus" class="status">Initializing camera...</p>
+          <p class="meta">
+            Confidence: <span id="identifiedConfidence">--</span>
+          </p>
+        </div>
+
+        <div class="actions">
+          <button id="cameraToggle" class="button secondary" type="button">
+            Close Camera
+          </button>
+          <button id="markNow" class="button primary" type="button" disabled>
+            Mark Verified Presence
+          </button>
+        </div>
+        <p id="cameraHint" class="hint">
+          Verify the identity shown on screen before recording attendance.
+        </p>
+        <p id="markStatus" class="hint subtle">Ready.</p>
+      </section>
+
+      <aside class="panel stats-panel">
+        <div class="stat-grid">
+          <div class="stat-card">
+            <span>Total</span>
+            <strong id="totalCount">0</strong>
+          </div>
+          <div class="stat-card">
+            <span>Present</span>
+            <strong id="presentCount">0</strong>
+          </div>
+          <div class="stat-card">
+            <span>Absent</span>
+            <strong id="absentCount">0</strong>
+          </div>
+        </div>
+
+        <section class="list-card">
+          <h2>Present Today</h2>
+          <ul id="presentList" class="name-list"></ul>
+        </section>
+
+        <section class="list-card">
+          <h2>Still Absent</h2>
+          <ul id="absentList" class="name-list"></ul>
+        </section>
+
+        <a class="link-button" href="{{ url_for('training') }}"
+          >Open Developer Reinforcement Console</a
+        >
+      </aside>
     </main>
+
+    <script>
+      window.APP_CONFIG = {
+        videoFeedUrl: "{{ url_for('video_feed') }}",
+        latestUrl: "{{ url_for('api_latest') }}",
+        cameraStartUrl: "{{ url_for('api_camera_start') }}",
+        cameraStopUrl: "{{ url_for('api_camera_stop') }}",
+        attendanceTodayUrl: "{{ url_for('api_attendance_today') }}",
+        attendanceMarkUrl: "{{ url_for('api_attendance_mark') }}",
+        attendanceUnmarkUrl: "{{ url_for('api_attendance_unmark') }}",
+      };
+    </script>
     <script src="{{ url_for('script_asset', filename='index.js') }}"></script>
   </body>
 </html>

@@ -295,15 +295,17 @@ def get_health_payload() -> dict[str, Any]:
 
 
 def get_latest_payload() -> dict[str, Any]:
-    ensure_camera_service()
     payload = CAMERA_SERVICE.get_latest()
     payload["retraining"] = get_retrain_status()
     return payload
 
 
 def stream_frames():
-    ensure_camera_service()
     while True:
+        if not CAMERA_SERVICE.running:
+            time.sleep(0.05)
+            continue
+
         frame = CAMERA_SERVICE.get_frame()
         if frame is None:
             time.sleep(0.05)
@@ -673,7 +675,12 @@ def retrain_with_feedback_async() -> dict[str, Any]:
 
 
 def start_camera() -> dict[str, Any]:
-    ensure_camera_service()
+    if is_retraining_running():
+        return {"status": "error", "message": "Camera is paused during retraining."}
+
+    if not CAMERA_SERVICE.running:
+        CAMERA_SERVICE.start()
+
     return {"status": "ok", "message": "Camera started"}
 
 
