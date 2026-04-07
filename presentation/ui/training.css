@@ -71,9 +71,9 @@ body::before {
 .hero {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(360px, 1fr);
-  gap: 16px;
-  align-items: center;
-  padding: 18px;
+  gap: 22px;
+  align-items: stretch;
+  padding: clamp(18px, 2.4dvh, 28px) clamp(18px, 1.8vw, 26px);
   border-radius: var(--radius);
   background: linear-gradient(
     160deg,
@@ -84,11 +84,14 @@ body::before {
   box-shadow: var(--shadow);
   backdrop-filter: blur(16px);
   min-height: 0;
-  height: fit-content;
+  height: 100%;
 }
 
 .hero-copy {
-  padding: 2px 4px;
+  padding: 14px 16px 14px 12px;
+  display: grid;
+  align-content: start;
+  gap: 14px;
 }
 
 .hero-topline {
@@ -97,7 +100,7 @@ body::before {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  margin-bottom: 10px;
+  margin-bottom: 2px;
 }
 
 .eyebrow {
@@ -107,6 +110,12 @@ body::before {
   letter-spacing: 0.2em;
   font-size: 0.76rem;
   font-weight: 700;
+}
+
+.nav-home {
+  text-decoration: none;
+  font-size: 0.78rem;
+  padding: 9px 12px;
 }
 
 .status-badges {
@@ -139,17 +148,52 @@ h1 {
 
 .lead {
   max-width: 54ch;
-  margin: 12px 0 0;
+  margin: 0;
   font-size: 0.95rem;
   line-height: 1.55;
   color: var(--muted);
+}
+
+.danger-banner {
+  margin-top: 0;
+  padding: 12px 14px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 92, 92, 0.42);
+  background: linear-gradient(
+    135deg,
+    rgba(140, 24, 24, 0.34),
+    rgba(62, 12, 12, 0.2)
+  );
+  color: #ffd9d9;
+  font-size: 0.84rem;
+  line-height: 1.45;
+}
+
+.danger-banner strong {
+  color: #ffbcbc;
 }
 
 .stats {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
-  margin-top: 16px;
+  margin-top: 0;
+}
+
+.stats-dev {
+  margin-top: 12px;
+}
+
+.risk-points {
+  margin: 2px 0 0;
+  padding-left: 18px;
+  color: var(--muted-strong);
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+
+.risk-points li + li {
+  margin-top: 4px;
 }
 
 .stat-card {
@@ -175,15 +219,17 @@ h1 {
 
 .camera-panel {
   display: grid;
-  gap: 8px;
+  grid-template-rows: minmax(0, 1fr) auto;
+  gap: 12px;
   min-height: 0;
+  height: 100%;
 }
 
 .camera-frame {
   position: relative;
   overflow: hidden;
   min-height: 0;
-  height: clamp(320px, 56dvh, 580px);
+  height: 100%;
   border-radius: 24px;
   background:
     radial-gradient(
@@ -304,6 +350,27 @@ h1 {
     rgba(31, 31, 31, 0.98),
     rgba(16, 16, 16, 0.94)
   );
+}
+
+.warning-card {
+  border-color: rgba(255, 92, 92, 0.34);
+  background: linear-gradient(
+    180deg,
+    rgba(68, 20, 20, 0.42),
+    rgba(26, 12, 12, 0.92)
+  );
+}
+
+.checklist {
+  margin: 10px 0 0;
+  padding-left: 16px;
+  color: #efc0c0;
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+
+.checklist li + li {
+  margin-top: 4px;
 }
 
 .result-label {
@@ -533,6 +600,17 @@ h1 {
 
   .result-card {
     padding: 12px;
+  }
+
+  .nav-home {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .danger-banner,
+  .risk-points,
+  .checklist {
+    font-size: 0.78rem;
   }
 
   .side-panel {
