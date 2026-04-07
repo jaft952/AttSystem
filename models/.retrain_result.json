@@ -1,0 +1,12 @@
+{
+  "status": "completed",
+  "message": "Retraining completed successfully.",
+  "error": null,
+  "result": {
+    "status": "ok",
+    "model": "lbph_final.yml",
+    "training_samples": 2122,
+    "feedback_samples": 22
+  },
+  "finished_at": "2026-04-07T14:15:48.965790"
+}

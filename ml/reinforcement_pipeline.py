@@ -1,15 +1,19 @@
 import base64
+import gc
 import json
+import multiprocessing as mp
 import threading
 import time
 from datetime import datetime
+from multiprocessing.process import BaseProcess
 from pathlib import Path
 from typing import Any
-
 import cv2
 import numpy as np
 
-# This module lives in AttSystem/processing, so project root is one level up.
+from service.camera_service import CameraService
+
+# This module lives in AttSystem/ml, so project root is one level up.
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 MODELS_ROOT = PROJECT_ROOT / "models"
 
@@ -18,7 +22,9 @@ HAAR_CASCADE_PATH = (
     Path(cv2.__file__).resolve().parent / "data" / "haarcascade_frontalface_default.xml"
 )
 FEEDBACK_ROOT = PROJECT_ROOT / "data" / "8_feedback"
+RETRAIN_RESULT_PATH = MODELS_ROOT / ".retrain_result.json"
 MODEL_LOCK = threading.Lock()
+CLIENT_SAMPLE_LOCK = threading.Lock()
 
 FEEDBACK_ROOT.mkdir(parents=True, exist_ok=True)
 
@@ -82,169 +88,192 @@ def load_runtime_assets() -> dict[str, Any]:
 
 
 ASSETS = load_runtime_assets()
-
-
-class CameraService:
-    def __init__(self, camera_index: int = 0):
-        self.camera_index = camera_index
-        self.capture = None
-        self.thread = None
-        self.running = False
-        self.lock = threading.Lock()
-        self.frame_bytes: bytes | None = None
-        self.latest_face_roi: np.ndarray | None = None
-        self.latest_prediction: dict[str, Any] = {
-            "status": "idle",
-            "name": "Waiting...",
-            "raw_name": "unknown",
-            "confidence": None,
-            "accepted": False,
-            "bbox": None,
-            "message": "Camera stream not started.",
-        }
-        self.frame_count = 0
-        self.last_error: str | None = None
-
-    def start(self):
-        if self.running:
-            return
-
-        capture = cv2.VideoCapture(self.camera_index, cv2.CAP_DSHOW)
-        if not capture.isOpened():
-            capture.release()
-            capture = cv2.VideoCapture(self.camera_index)
-        if not capture.isOpened():
-            raise RuntimeError("Could not open the webcam on this machine.")
-
-        self.capture = capture
-        self.running = True
-        self.thread = threading.Thread(target=self._update_loop, daemon=True)
-        self.thread.start()
-
-    def stop(self):
-        self.running = False
-        if self.capture is not None:
-            self.capture.release()
-            self.capture = None
-
-    def _update_loop(self):
-        while self.running and self.capture is not None:
-            ok, frame = self.capture.read()
-            if not ok:
-                with self.lock:
-                    self.last_error = "Failed to read a frame from the webcam."
-                    self.latest_prediction = {
-                        "status": "error",
-                        "name": "Camera error",
-                        "raw_name": "unknown",
-                        "confidence": None,
-                        "accepted": False,
-                        "bbox": None,
-                        "message": self.last_error,
-                    }
-                time.sleep(0.1)
-                continue
-
-            frame = cv2.flip(frame, 1)
-            annotated_frame, prediction, face_roi = self._process_frame(frame)
-
-            ok, buffer = cv2.imencode(
-                ".jpg", annotated_frame, [int(cv2.IMWRITE_JPEG_QUALITY), 85]
-            )
-            if ok:
-                with self.lock:
-                    self.frame_bytes = buffer.tobytes()
-                    self.latest_face_roi = None if face_roi is None else face_roi.copy()
-                    self.latest_prediction = prediction
-                    self.last_error = None
-                    self.frame_count += 1
-
-            time.sleep(0.03)
-
-        if self.capture is not None:
-            self.capture.release()
-            self.capture = None
-
-    def _process_frame(self, frame: np.ndarray):
-        display = frame.copy()
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        faces = ASSETS["face_cascade"].detectMultiScale(
-            gray,
-            scaleFactor=1.1,
-            minNeighbors=5,
-            minSize=(50, 50),
-        )
-
-        face_box = pick_largest_face(faces)
-        if face_box is None:
-            prediction = {
-                "status": "no_face",
-                "name": "No face",
-                "raw_name": "unknown",
-                "confidence": None,
-                "accepted": False,
-                "bbox": None,
-                "message": "No face detected.",
-            }
-            return display, prediction, None
-
-        face_roi = preprocess_face(
-            gray, face_box, input_size=ASSETS["input_size"], padding=0.20
-        )
-        if face_roi is None:
-            prediction = {
-                "status": "invalid_roi",
-                "name": "Invalid ROI",
-                "raw_name": "unknown",
-                "confidence": None,
-                "accepted": False,
-                "bbox": None,
-                "message": "Face ROI could not be prepared.",
-            }
-            return display, prediction, None
-
-        prediction = predict_face(face_roi)
-        x, y, w, h = map(int, face_box)
-        cv2.rectangle(display, (x, y), (x + w, y + h), (255, 255, 255), 2)
-        prediction.update(
-            {
-                "status": "ok",
-                "bbox": {"x": x, "y": y, "w": w, "h": h},
-                "message": "Prediction updated.",
-            }
-        )
-        return display, prediction, face_roi
-
-    def get_latest(self):
-        with self.lock:
-            return {
-                "prediction": self.latest_prediction,
-                "frame_count": self.frame_count,
-                "last_error": self.last_error,
-                "running": self.running,
-            }
-
-    def get_frame(self):
-        with self.lock:
-            return self.frame_bytes
-
-    def get_feedback_sample(self):
-        with self.lock:
-            if self.latest_face_roi is None:
-                return None, dict(self.latest_prediction)
-            return self.latest_face_roi.copy(), dict(self.latest_prediction)
-
-
-CAMERA_SERVICE = CameraService()
+CLIENT_FEEDBACK_SAMPLE: dict[str, Any] = {
+    "face_roi": None,
+    "prediction": None,
+    "captured_at": 0.0,
+}
+RETRAIN_LOCK = threading.Lock()
+RETRAIN_PROCESS: BaseProcess | None = None
+RETRAIN_STATE: dict[str, Any] = {
+    "status": "idle",
+    "message": "No retraining job has started yet.",
+    "started_at": None,
+    "finished_at": None,
+    "error": None,
+    "result": None,
+    "camera_paused": False,
+}
 
 
 def get_label_names() -> list[str]:
     return [name for _, name in sorted(ASSETS["label_map"].items(), key=lambda item: item[0])]
 
 
+def is_retraining_running() -> bool:
+    with RETRAIN_LOCK:
+        return RETRAIN_STATE.get("status") == "running"
+
+
 def ensure_camera_service():
+    if is_retraining_running():
+        return
     if not CAMERA_SERVICE.running:
         CAMERA_SERVICE.start()
+
+
+def get_retrain_status() -> dict[str, Any]:
+    _finalize_retrain_if_finished()
+    with RETRAIN_LOCK:
+        return dict(RETRAIN_STATE)
+
+
+def _set_retrain_state(**updates: Any):
+    with RETRAIN_LOCK:
+        RETRAIN_STATE.update(updates)
+
+
+def _reload_runtime_assets_from_disk():
+    fresh_assets = load_runtime_assets()
+    ASSETS.update(fresh_assets)
+
+
+def _write_retrain_result(payload: dict[str, Any]):
+    RETRAIN_RESULT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = RETRAIN_RESULT_PATH.with_suffix(".tmp")
+    with temp_path.open("w", encoding="utf-8") as handle:
+        json.dump(payload, handle, indent=2)
+    temp_path.replace(RETRAIN_RESULT_PATH)
+
+
+def _retrain_worker_process():
+    try:
+        result = retrain_runtime_model(include_feedback=True)
+        _write_retrain_result(
+            {
+                "status": "completed",
+                "message": "Retraining completed successfully.",
+                "error": None,
+                "result": result,
+                "finished_at": datetime.now().isoformat(),
+            }
+        )
+    except Exception as exc:
+        _write_retrain_result(
+            {
+                "status": "failed",
+                "message": "Retraining failed.",
+                "error": str(exc),
+                "result": None,
+                "finished_at": datetime.now().isoformat(),
+            }
+        )
+
+
+def _finalize_retrain_if_finished():
+    global RETRAIN_PROCESS
+
+    with RETRAIN_LOCK:
+        process = RETRAIN_PROCESS
+        if process is None:
+            return
+        if process.is_alive():
+            return
+        RETRAIN_PROCESS = None
+        camera_paused = bool(RETRAIN_STATE.get("camera_paused"))
+
+    exit_code = process.exitcode
+    result_payload: dict[str, Any] | None = None
+    if RETRAIN_RESULT_PATH.exists():
+        try:
+            with RETRAIN_RESULT_PATH.open("r", encoding="utf-8") as handle:
+                result_payload = json.load(handle)
+        except Exception:
+            result_payload = None
+
+    if exit_code == 0 and result_payload and result_payload.get("status") == "completed":
+        try:
+            _reload_runtime_assets_from_disk()
+            _set_retrain_state(
+                status="completed",
+                message=result_payload.get("message") or "Retraining completed successfully.",
+                error=None,
+                result=result_payload.get("result"),
+                finished_at=result_payload.get("finished_at") or datetime.now().isoformat(),
+            )
+        except Exception as exc:
+            _set_retrain_state(
+                status="failed",
+                message="Retraining finished, but runtime assets could not be reloaded.",
+                error=str(exc),
+                result=None,
+                finished_at=datetime.now().isoformat(),
+            )
+    else:
+        error_message = (
+            (result_payload or {}).get("error")
+            or f"Retraining worker exited unexpectedly (exit code {exit_code})."
+        )
+        _set_retrain_state(
+            status="failed",
+            message=(result_payload or {}).get("message") or "Retraining failed.",
+            error=error_message,
+            result=(result_payload or {}).get("result"),
+            finished_at=(result_payload or {}).get("finished_at") or datetime.now().isoformat(),
+        )
+
+    if camera_paused:
+        try:
+            CAMERA_SERVICE.start()
+        except Exception as exc:
+            _set_retrain_state(
+                message="Retraining finished, but camera failed to restart.",
+                error=f"{RETRAIN_STATE.get('error') or ''} | Camera restart error: {exc}".strip(" |"),
+            )
+
+
+def start_retrain_with_feedback_async() -> dict[str, Any]:
+    global RETRAIN_PROCESS
+
+    _finalize_retrain_if_finished()
+
+    with RETRAIN_LOCK:
+        if RETRAIN_STATE.get("status") == "running":
+            return {
+                "status": "running",
+                "message": "Retraining is already in progress.",
+                "started_at": RETRAIN_STATE.get("started_at"),
+            }
+
+        resume_camera_after = bool(CAMERA_SERVICE.running)
+        if resume_camera_after:
+            CAMERA_SERVICE.stop()
+
+        if RETRAIN_RESULT_PATH.exists():
+            RETRAIN_RESULT_PATH.unlink(missing_ok=True)
+
+        RETRAIN_STATE.update(
+            {
+                "status": "running",
+                "message": "Retraining started in background.",
+                "started_at": datetime.now().isoformat(),
+                "finished_at": None,
+                "error": None,
+                "result": None,
+                "camera_paused": resume_camera_after,
+            }
+        )
+
+    context = mp.get_context("spawn")
+    retrain_process = context.Process(target=_retrain_worker_process, daemon=True)
+    retrain_process.start()
+    RETRAIN_PROCESS = retrain_process
+
+    return {
+        "status": "started",
+        "message": "Retraining started in background.",
+        "camera_paused": resume_camera_after,
+    }
 
 
 def get_training_template_context(app_name: str) -> dict[str, Any]:
@@ -267,7 +296,9 @@ def get_health_payload() -> dict[str, Any]:
 
 def get_latest_payload() -> dict[str, Any]:
     ensure_camera_service()
-    return CAMERA_SERVICE.get_latest()
+    payload = CAMERA_SERVICE.get_latest()
+    payload["retraining"] = get_retrain_status()
+    return payload
 
 
 def stream_frames():
@@ -279,7 +310,7 @@ def stream_frames():
             continue
 
         yield b"--frame\r\n" b"Content-Type: image/jpeg\r\n\r\n" + frame + b"\r\n"
-        time.sleep(0.03)
+        time.sleep(0.005)
 
 
 def save_feedback_sample(face_roi: np.ndarray, label_name: str, metadata: dict[str, Any]) -> Path:
@@ -341,6 +372,7 @@ def build_training_samples(
 
 def retrain_runtime_model(include_feedback: bool = True) -> dict[str, Any]:
     with MODEL_LOCK:
+        gc.collect()
         name_to_label = {name: label_id for label_id, name in ASSETS["label_map"].items()}
         base_root = PROJECT_ROOT / "data" / "7_augmented"
         if not base_root.exists():
@@ -367,6 +399,8 @@ def retrain_runtime_model(include_feedback: bool = True) -> dict[str, Any]:
         if len(x_train) == 0:
             raise RuntimeError("No training images available for retraining.")
 
+        total_samples = len(x_train)
+
         model = create_lbph_recognizer()
         model.setRadius(2)
         model.setNeighbors(8)
@@ -386,10 +420,14 @@ def retrain_runtime_model(include_feedback: bool = True) -> dict[str, Any]:
         ASSETS["model_path"] = model_path
         ASSETS["recognizer"] = model
 
+        del x_train
+        del y_train
+        gc.collect()
+
         return {
             "status": "ok",
             "model": model_path.name,
-            "training_samples": int(len(x_train)),
+            "training_samples": int(total_samples),
             "feedback_samples": int(feedback_samples),
         }
 
@@ -417,6 +455,101 @@ def preprocess_face(gray_frame: np.ndarray, face_box, input_size=(128, 128), pad
     roi = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8)).apply(roi)
     roi = cv2.resize(roi, input_size, interpolation=cv2.INTER_CUBIC)
     return roi
+
+
+def process_camera_frame(frame: np.ndarray):
+    display = frame.copy()
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    detect_scale = 0.6
+    small_gray = cv2.resize(
+        gray,
+        (0, 0),
+        fx=detect_scale,
+        fy=detect_scale,
+        interpolation=cv2.INTER_AREA,
+    )
+    faces = ASSETS["face_cascade"].detectMultiScale(
+        small_gray,
+        scaleFactor=1.1,
+        minNeighbors=5,
+        minSize=(30, 30),
+    )
+
+    if faces is not None and len(faces) > 0:
+        inv_scale = 1.0 / detect_scale
+        faces = np.array(
+            [
+                [
+                    int(x * inv_scale),
+                    int(y * inv_scale),
+                    int(w * inv_scale),
+                    int(h * inv_scale),
+                ]
+                for (x, y, w, h) in faces
+            ],
+            dtype=np.int32,
+        )
+
+    face_box = pick_largest_face(faces)
+    if face_box is None:
+        prediction = {
+            "status": "no_face",
+            "name": "No face",
+            "raw_name": "unknown",
+            "confidence": None,
+            "accepted": False,
+            "bbox": None,
+            "message": "No face detected.",
+        }
+        return display, prediction, None
+
+    face_roi = preprocess_face(
+        gray, face_box, input_size=ASSETS["input_size"], padding=0.20
+    )
+    if face_roi is None:
+        prediction = {
+            "status": "invalid_roi",
+            "name": "Invalid ROI",
+            "raw_name": "unknown",
+            "confidence": None,
+            "accepted": False,
+            "bbox": None,
+            "message": "Face ROI could not be prepared.",
+        }
+        return display, prediction, None
+
+    prediction = predict_face(face_roi)
+    x, y, w, h = map(int, face_box)
+    cv2.rectangle(display, (x, y), (x + w, y + h), (255, 255, 255), 2)
+    prediction.update(
+        {
+            "status": "ok",
+            "bbox": {"x": x, "y": y, "w": w, "h": h},
+            "message": "Prediction updated.",
+        }
+    )
+    return display, prediction, face_roi
+
+
+def update_client_feedback_sample(face_roi: np.ndarray | None, prediction: dict[str, Any] | None):
+    with CLIENT_SAMPLE_LOCK:
+        CLIENT_FEEDBACK_SAMPLE["face_roi"] = None if face_roi is None else face_roi.copy()
+        CLIENT_FEEDBACK_SAMPLE["prediction"] = None if prediction is None else dict(prediction)
+        CLIENT_FEEDBACK_SAMPLE["captured_at"] = time.time() if face_roi is not None else 0.0
+
+
+def get_client_feedback_sample(max_age_sec: float = 4.0):
+    with CLIENT_SAMPLE_LOCK:
+        face_roi = CLIENT_FEEDBACK_SAMPLE.get("face_roi")
+        prediction = CLIENT_FEEDBACK_SAMPLE.get("prediction")
+        captured_at = float(CLIENT_FEEDBACK_SAMPLE.get("captured_at") or 0.0)
+
+        if face_roi is None or prediction is None:
+            return None, None
+        if captured_at <= 0.0 or (time.time() - captured_at) > max_age_sec:
+            return None, None
+
+        return face_roi.copy(), dict(prediction)
 
 
 def predict_face(face_roi: np.ndarray) -> dict[str, Any]:
@@ -464,6 +597,7 @@ def predict_from_payload(image_data: str) -> dict[str, Any]:
 
     face_box = pick_largest_face(faces)
     if face_box is None:
+        update_client_feedback_sample(None, None)
         return {
             "status": "no_face",
             "message": "No face detected.",
@@ -471,12 +605,14 @@ def predict_from_payload(image_data: str) -> dict[str, Any]:
 
     face_roi = preprocess_face(gray, face_box, input_size=ASSETS["input_size"], padding=0.20)
     if face_roi is None:
+        update_client_feedback_sample(None, None)
         return {
             "status": "invalid_roi",
             "message": "Face ROI could not be prepared.",
         }
 
     prediction = predict_face(face_roi)
+    update_client_feedback_sample(face_roi, prediction)
     x, y, w, h = map(int, face_box)
     return {
         "status": "ok",
@@ -488,11 +624,12 @@ def predict_from_payload(image_data: str) -> dict[str, Any]:
 
 
 def save_feedback(action: str, selected_label: str) -> dict[str, Any]:
-    ensure_camera_service()
     face_roi, prediction = CAMERA_SERVICE.get_feedback_sample()
-
     if face_roi is None:
-        raise ValueError("No face ROI is available yet.")
+        face_roi, prediction = get_client_feedback_sample(max_age_sec=4.0)
+
+    if face_roi is None or prediction is None:
+        raise ValueError("No recent face ROI is available yet. Keep your face in frame and try again.")
 
     if action == "confirm":
         if not prediction.get("accepted") or prediction.get("raw_name") in {None, "unknown", ""}:
@@ -531,6 +668,10 @@ def retrain_with_feedback() -> dict[str, Any]:
     return retrain_runtime_model(include_feedback=True)
 
 
+def retrain_with_feedback_async() -> dict[str, Any]:
+    return start_retrain_with_feedback_async()
+
+
 def start_camera() -> dict[str, Any]:
     ensure_camera_service()
     return {"status": "ok", "message": "Camera started"}
@@ -540,3 +681,6 @@ def stop_camera() -> dict[str, Any]:
     if CAMERA_SERVICE.running:
         CAMERA_SERVICE.stop()
     return {"status": "ok", "message": "Camera stopped"}
+
+
+CAMERA_SERVICE = CameraService(frame_processor=process_camera_frame)

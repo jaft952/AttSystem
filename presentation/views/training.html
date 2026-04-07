@@ -63,17 +63,23 @@
 
         <div class="camera-panel">
           <div class="camera-frame">
-            <img
-              id="camera"
-              src="{{ url_for('training_video_feed') }}"
-              alt="Live camera feed"
-            />
+            <img id="cameraVideo" alt="Live camera stream" />
+            <canvas id="cameraOverlay" aria-hidden="true"></canvas>
+            <div
+              id="retrainOverlay"
+              class="retrain-overlay hidden"
+              aria-live="polite"
+            >
+              <div class="loader" aria-hidden="true"></div>
+              <p id="retrainOverlayText">Retraining in progress...</p>
+            </div>
           </div>
           <div class="camera-controls">
             <button id="cameraToggle" class="button secondary" type="button">
               Close Camera
             </button>
           </div>
+          <p id="cameraHint" class="camera-hint">Loading backend stream...</p>
         </div>
       </section>
 
@@ -164,56 +170,14 @@
     <script>
       window.APP_CONFIG = {
         predictUrl: "{{ url_for('api_predict') }}",
-        latestUrl: "{{ url_for('training_api_latest') }}",
         healthUrl: "{{ url_for('health') }}",
-        feedUrl: "{{ url_for('training_video_feed') }}",
+        latestUrl: "{{ url_for('api_latest') }}",
+        retrainUrl: "{{ url_for('api_retrain') }}",
+        retrainStatusUrl: "{{ url_for('api_retrain_status') }}",
+        videoFeedUrl: "{{ url_for('video_feed') }}",
+        cameraStartUrl: "{{ url_for('api_camera_start') }}",
+        cameraStopUrl: "{{ url_for('api_camera_stop') }}",
       };
-
-      // Camera toggle functionality
-      document.addEventListener("DOMContentLoaded", function () {
-        const cameraToggle = document.getElementById("cameraToggle");
-        const camera = document.getElementById("camera");
-        const cameraSource = window.APP_CONFIG.feedUrl;
-        let isCameraOpen = true;
-
-        cameraToggle.addEventListener("click", async function () {
-          isCameraOpen = !isCameraOpen;
-          cameraToggle.disabled = true;
-
-          try {
-            if (isCameraOpen) {
-              // Start the camera on backend
-              const response = await fetch("/api/camera/start", {
-                method: "POST",
-              });
-              if (response.ok) {
-                camera.src = cameraSource;
-                camera.style.display = "block";
-                cameraToggle.textContent = "Close Camera";
-              } else {
-                throw new Error("Failed to start camera");
-              }
-            } else {
-              // Stop the camera on backend
-              const response = await fetch("/api/camera/stop", {
-                method: "POST",
-              });
-              if (response.ok) {
-                camera.src = "";
-                camera.style.display = "none";
-                cameraToggle.textContent = "Open Camera";
-              } else {
-                throw new Error("Failed to stop camera");
-              }
-            }
-          } catch (error) {
-            console.error("Camera toggle error:", error);
-            isCameraOpen = !isCameraOpen; // Revert state on error
-          } finally {
-            cameraToggle.disabled = false;
-          }
-        });
-      });
     </script>
     <script src="{{ url_for('static', filename='training.js') }}"></script>
   </body>

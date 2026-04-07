@@ -260,12 +260,58 @@ h1 {
   pointer-events: none;
 }
 
-#camera {
+.retrain-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: grid;
+  place-content: center;
+  gap: 14px;
+  text-align: center;
+  background: rgba(5, 5, 5, 0.84);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  backdrop-filter: blur(10px);
+}
+
+.loader {
+  width: 46px;
+  height: 46px;
+  margin: 0 auto;
+  border-radius: 50%;
+  border: 4px solid rgba(255, 255, 255, 0.24);
+  border-top-color: #ffffff;
+  animation: spin 0.85s linear infinite;
+}
+
+.retrain-overlay p {
+  margin: 0;
+  color: #f0f0f0;
+  font-size: 0.9rem;
+  line-height: 1.4;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+#cameraVideo,
+#cameraOverlay {
+  position: absolute;
+  inset: 0;
   width: 100%;
   height: 100%;
   min-height: 0;
-  object-fit: cover;
+}
+
+#cameraVideo {
+  object-fit: contain;
   background: #000;
+}
+
+#cameraOverlay {
+  pointer-events: none;
 }
 
 .hidden {
@@ -554,7 +600,8 @@ h1 {
   }
 
   .camera-frame,
-  #camera {
+  #cameraVideo,
+  #cameraOverlay {
     height: clamp(280px, 42dvh, 480px);
   }
 }
@@ -580,7 +627,8 @@ h1 {
   }
 
   .camera-frame,
-  #camera {
+  #cameraVideo,
+  #cameraOverlay {
     height: clamp(220px, 32dvh, 340px);
   }
 

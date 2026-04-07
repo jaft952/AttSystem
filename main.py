@@ -1,7 +1,7 @@
 from pathlib import Path
 from flask import Flask, Response, jsonify, render_template, request
 
-from processing import reinforcement_pipeline as training_service
+from ml import reinforcement_pipeline as training_service
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -34,16 +34,15 @@ def api_latest():
     return jsonify(training_service.get_latest_payload())
 
 
-@APP.get("/training_api_latest")
-def training_api_latest():
-    return jsonify(training_service.get_latest_payload())
-
-
 @APP.get("/video_feed")
 def video_feed():
     return Response(
         training_service.stream_frames(),
         mimetype="multipart/x-mixed-replace; boundary=frame",
+        headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+        },
     )
 
 
@@ -52,6 +51,10 @@ def training_video_feed():
     return Response(
         training_service.stream_frames(),
         mimetype="multipart/x-mixed-replace; boundary=frame",
+        headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+        },
     )
 
 
@@ -85,15 +88,15 @@ def api_feedback():
 @APP.post("/api/retrain")
 def api_retrain():
     try:
-        return jsonify(training_service.retrain_with_feedback())
+        return jsonify(training_service.retrain_with_feedback_async())
     except Exception as exc:
         return jsonify({"error": str(exc)}), 500
 
 
-@APP.post("/api/camera/stop")
-def api_camera_stop():
+@APP.get("/api/retrain/status")
+def api_retrain_status():
     try:
-        return jsonify(training_service.stop_camera())
+        return jsonify(training_service.get_retrain_status())
     except Exception as exc:
         return jsonify({"error": str(exc)}), 500
 
@@ -106,5 +109,13 @@ def api_camera_start():
         return jsonify({"error": str(exc)}), 500
 
 
+@APP.post("/api/camera/stop")
+def api_camera_stop():
+    try:
+        return jsonify(training_service.stop_camera())
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
 if __name__ == "__main__":
-    APP.run(host="0.0.0.0", port=5000, debug=True)
+    APP.run(host="0.0.0.0", port=5000, debug=False, use_reloader=False, threaded=True)
