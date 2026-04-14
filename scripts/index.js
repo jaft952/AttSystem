@@ -15,6 +15,8 @@ let latestTimer = null;
 let attendanceTimer = null;
 let lastPrediction = null;
 let markBusy = false;
+const MODEL_PREF_KEY = "attsystem_selected_model";
+const SUPPORTED_MODELS = ["cbir_method1", "cbir_method2"];
 
 function setText(element, value) {
   if (element) {
@@ -293,6 +295,31 @@ async function stopCamera() {
   cameraToggle.disabled = false;
 }
 
+async function syncModelPreference() {
+  const preferred = localStorage.getItem(MODEL_PREF_KEY);
+  if (!preferred || !SUPPORTED_MODELS.includes(preferred)) {
+    return;
+  }
+
+  try {
+    const healthResponse = await fetch("/api/health", { cache: "no-store" });
+    const healthData = await readJson(healthResponse);
+    const backendModel = String(healthData.model_type || "").toLowerCase();
+
+    if (healthResponse.ok && backendModel === preferred) {
+      return;
+    }
+
+    await fetch("/api/model/switch", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model_type: preferred }),
+    });
+  } catch (_) {
+    // Ignore failures and continue with backend default.
+  }
+}
+
 if (cameraToggle) {
   cameraToggle.addEventListener("click", async () => {
     if (cameraRunning) {
@@ -331,4 +358,6 @@ window.addEventListener("beforeunload", () => {
 setHint("Starting backend stream...");
 setMarkStatus("Ready.");
 updateMarkButtonState(lastPrediction);
-startCamera();
+syncModelPreference().then(() => {
+  startCamera();
+});

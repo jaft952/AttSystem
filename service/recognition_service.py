@@ -1,7 +1,9 @@
 import base64
 import json
+import shutil
 import threading
 import time
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -14,15 +16,24 @@ from service.camera_service import CameraService
 # This module lives in AttSystem/ml, so project root is one level up.
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 MODELS_ROOT = PROJECT_ROOT / "models"
+CONFIG_ROOT = PROJECT_ROOT / "config"
 
-RUNTIME_CONFIG_PATH = MODELS_ROOT / "realtime_model_config.json"
+RUNTIME_CONFIG_PATH = CONFIG_ROOT / "realtime_model_config.json"
 HAAR_CASCADE_PATH = (
     Path(cv2.__file__).resolve().parent / "data" / "haarcascade_frontalface_default.xml"
 )
 MODEL_LOCK = threading.Lock()
+MODEL_SWITCH_LOCK = threading.Lock()
+CBIR_MODEL_TYPES = {"cbir_method1", "cbir_method2"}
+DEFAULT_MODEL_TYPE = "cbir_method1"
 
 DEFAULT_ACCEPTANCE_THRESHOLD = 160.0
 DEFAULT_STRICT_UNKNOWN_THRESHOLD = 100.0
+MAX_LBPH_MODEL_BYTES = 300 * 1024 * 1024
+
+
+def _format_size_mb(num_bytes: int) -> str:
+    return f"{num_bytes / (1024 * 1024):.1f} MB"
 
 
 def resolve_strict_unknown_threshold(runtime_config: dict[str, Any], acceptance_threshold: float) -> float:
@@ -76,8 +87,8 @@ def _get_model_config(config: dict[str, Any], model_type: str) -> dict[str, Any]
     return {}
 
 
-def load_cbir_model(config: dict[str, Any]) -> dict[str, Any]:
-    cbir_config = _get_model_config(config, "cbir")
+def load_cbir_model(config: dict[str, Any], model_type: str) -> dict[str, Any]:
+    cbir_config = _get_model_config(config, model_type)
     index_path = Path(cbir_config.get("index_path", ""))
     meta_path = Path(cbir_config.get("meta_path", ""))
 
@@ -101,6 +112,8 @@ def load_cbir_model(config: dict[str, Any]) -> dict[str, Any]:
         "label_names": label_names,
         "threshold": float(cbir_config.get("similarity_threshold", 0.6)),
         "input_size": tuple(cbir_config.get("input_size", [128, 128])),
+        "preprocess_mode": str(cbir_config.get("preprocess_mode", "method1")).strip().lower(),
+        "display_name": str(cbir_config.get("display_name", model_type)).strip(),
     }
 
 
@@ -112,8 +125,44 @@ def load_lbph_model(config: dict[str, Any]) -> dict[str, Any]:
     strict_unknown_threshold = resolve_strict_unknown_threshold(lbph_config, threshold)
     input_size = tuple(lbph_config.get("input_size", [128, 128]))
 
+    if not model_path.exists():
+        raise FileNotFoundError(f"LBPH model not found: {model_path}")
+
+    model_size = model_path.stat().st_size
+    if model_size > MAX_LBPH_MODEL_BYTES:
+        raise RuntimeError(
+            "LBPH model file is too large to load safely "
+            f"({_format_size_mb(model_size)}; limit {_format_size_mb(MAX_LBPH_MODEL_BYTES)}). "
+            "This usually indicates a bad training output. Retrain and regenerate models/lbph.yml."
+        )
+
     recognizer = create_lbph_recognizer()
-    recognizer.read(str(model_path))
+    last_error: Exception | None = None
+    for attempt in range(3):
+        tmp_path: str | None = None
+        try:
+            # Read from a temp snapshot so concurrent writers do not break OpenCV FileStorage parsing.
+            with tempfile.NamedTemporaryFile(suffix=".yml", delete=False) as tmp_file:
+                tmp_path = tmp_file.name
+            shutil.copy2(model_path, tmp_path)
+            recognizer.read(str(tmp_path))
+            last_error = None
+            break
+        except Exception as exc:
+            last_error = exc
+            time.sleep(0.08 * (attempt + 1))
+        finally:
+            if tmp_path:
+                try:
+                    Path(tmp_path).unlink(missing_ok=True)
+                except Exception:
+                    pass
+
+    if last_error is not None:
+        raise RuntimeError(
+            f"Failed to load LBPH model from {model_path}. The file may be temporarily incomplete; retry or retrain the model."
+        ) from last_error
+
     label_map = load_label_map(label_map_path)
 
     return {
@@ -126,6 +175,12 @@ def load_lbph_model(config: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _load_model_for_type(config: dict[str, Any], model_type: str) -> dict[str, Any]:
+    if model_type in CBIR_MODEL_TYPES:
+        return load_cbir_model(config, model_type)
+    raise ValueError(f"Unsupported model type '{model_type}'.")
+
+
 def load_runtime_assets() -> dict[str, Any]:
     if not RUNTIME_CONFIG_PATH.exists():
         raise FileNotFoundError(
@@ -135,26 +190,19 @@ def load_runtime_assets() -> dict[str, Any]:
     with RUNTIME_CONFIG_PATH.open("r", encoding="utf-8") as handle:
         runtime_config = json.load(handle)
 
-    requested_model_type = str(runtime_config.get("model_type", "lbph")).strip().lower()
-    if requested_model_type not in {"lbph", "cbir"}:
-        requested_model_type = "lbph"
+    requested_model_type = str(runtime_config.get("model_type", DEFAULT_MODEL_TYPE)).strip().lower()
+    if requested_model_type not in CBIR_MODEL_TYPES:
+        requested_model_type = DEFAULT_MODEL_TYPE
 
     model_data: dict[str, Any]
     loaded_model_type: str
     try:
-        if requested_model_type == "cbir":
-            model_data = load_cbir_model(runtime_config)
-            loaded_model_type = "cbir"
-        else:
-            model_data = load_lbph_model(runtime_config)
-            loaded_model_type = "lbph"
+        model_data = load_cbir_model(runtime_config, requested_model_type)
+        loaded_model_type = requested_model_type
     except Exception:
-        if requested_model_type == "cbir":
-            model_data = load_lbph_model(runtime_config)
-            loaded_model_type = "lbph"
-        else:
-            model_data = load_cbir_model(runtime_config)
-            loaded_model_type = "cbir"
+        fallback_type = "cbir_method2" if requested_model_type == "cbir_method1" else "cbir_method1"
+        model_data = load_cbir_model(runtime_config, fallback_type)
+        loaded_model_type = fallback_type
 
     face_cascade = cv2.CascadeClassifier(str(HAAR_CASCADE_PATH))
     if face_cascade.empty():
@@ -183,15 +231,9 @@ def get_label_names() -> list[str]:
 
 
 def get_developer_tools_template_context(app_name: str) -> dict[str, Any]:
-    model_type = ASSETS.get("model_type", "lbph")
+    model_type = ASSETS.get("model_type", DEFAULT_MODEL_TYPE)
     model_data = ASSETS.get("model_data", {})
-
-    if model_type == "cbir":
-        model_name = "CBIR"
-    else:
-        lbph_config = _get_model_config(ASSETS.get("runtime_config", {}), "lbph")
-        model_path = Path(lbph_config.get("identity_model", "lbph.yml"))
-        model_name = model_path.name
+    model_name = model_data.get("display_name") or model_type
 
     return {
         "app_name": app_name,
@@ -206,13 +248,13 @@ def get_developer_tools_template_context(app_name: str) -> dict[str, Any]:
 def get_health_payload() -> dict[str, Any]:
     return {
         "status": "ok",
-        "model_type": ASSETS.get("model_type", "lbph"),
+        "model_type": ASSETS.get("model_type", DEFAULT_MODEL_TYPE),
     }
 
 
 def get_latest_payload() -> dict[str, Any]:
     payload = CAMERA_SERVICE.get_latest()
-    payload["model_type"] = ASSETS.get("model_type", "lbph")
+    payload["model_type"] = ASSETS.get("model_type", DEFAULT_MODEL_TYPE)
     return payload
 
 
@@ -237,7 +279,13 @@ def pick_largest_face(faces: np.ndarray | None):
     return max(faces, key=lambda box: box[2] * box[3])
 
 
-def preprocess_face(gray_frame: np.ndarray, face_box, input_size=(128, 128), padding=0.20):
+def preprocess_face(
+    gray_frame: np.ndarray,
+    face_box,
+    input_size=(128, 128),
+    padding=0.20,
+    preprocess_mode: str = "method1",
+):
     x, y, w, h = face_box
     pad_x = int(w * padding)
     pad_y = int(h * padding)
@@ -251,7 +299,14 @@ def preprocess_face(gray_frame: np.ndarray, face_box, input_size=(128, 128), pad
     if roi.size == 0:
         return None
 
-    roi = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8)).apply(roi)
+    mode = (preprocess_mode or "method1").lower()
+    if mode == "method2":
+        roi = cv2.equalizeHist(roi)
+        roi = cv2.medianBlur(roi, 3)
+    else:
+        roi = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8)).apply(roi)
+        roi = cv2.GaussianBlur(roi, (3, 3), 0)
+
     roi = cv2.resize(roi, input_size, interpolation=cv2.INTER_CUBIC)
     return roi
 
@@ -331,12 +386,8 @@ def _predict_cbir(face_roi: np.ndarray, model_data: dict[str, Any]) -> dict[str,
 
 def predict_face(face_roi: np.ndarray) -> dict[str, Any]:
     with MODEL_LOCK:
-        model_type = ASSETS["model_type"]
         model_data = ASSETS["model_data"]
-
-        if model_type == "cbir":
-            return _predict_cbir(face_roi, model_data)
-        return _predict_lbph(face_roi, model_data)
+        return _predict_cbir(face_roi, model_data)
 
 
 def process_camera_frame(frame: np.ndarray):
@@ -385,7 +436,14 @@ def process_camera_frame(frame: np.ndarray):
         }
         return display, prediction, None
 
-    face_roi = preprocess_face(gray, face_box, input_size=ASSETS["input_size"], padding=0.20)
+    model_data = ASSETS.get("model_data", {})
+    face_roi = preprocess_face(
+        gray,
+        face_box,
+        input_size=ASSETS["input_size"],
+        padding=0.20,
+        preprocess_mode=str(model_data.get("preprocess_mode", "method1")),
+    )
     if face_roi is None:
         prediction = {
             "status": "invalid_roi",
@@ -441,7 +499,13 @@ def predict_from_payload(image_data: str) -> dict[str, Any]:
         }
 
     model_data = ASSETS.get("model_data", {})
-    face_roi = preprocess_face(gray, face_box, input_size=model_data.get("input_size", ASSETS["input_size"]), padding=0.20)
+    face_roi = preprocess_face(
+        gray,
+        face_box,
+        input_size=model_data.get("input_size", ASSETS["input_size"]),
+        padding=0.20,
+        preprocess_mode=str(model_data.get("preprocess_mode", "method1")),
+    )
     if face_roi is None:
         return {
             "status": "invalid_roi",
@@ -455,32 +519,53 @@ def predict_from_payload(image_data: str) -> dict[str, Any]:
         "prediction": prediction,
         "bbox": {"x": x, "y": y, "w": w, "h": h},
         "threshold": model_data.get("threshold", 0.6),
-        "model_type": ASSETS.get("model_type", "lbph"),
+        "model_type": ASSETS.get("model_type", DEFAULT_MODEL_TYPE),
     }
 
 
 def switch_model(new_model_type: str) -> dict[str, Any]:
-    if new_model_type not in {"lbph", "cbir"}:
-        raise ValueError("Model type must be 'lbph' or 'cbir'.")
+    if new_model_type not in CBIR_MODEL_TYPES:
+        raise ValueError("Model type must be 'cbir_method1' or 'cbir_method2'.")
 
-    runtime_config = dict(ASSETS["runtime_config"])
-    runtime_config["model_type"] = new_model_type
+    with MODEL_SWITCH_LOCK:
+        if ASSETS.get("model_type") == new_model_type:
+            model_data = ASSETS.get("model_data", {})
+            return {
+                "status": "ok",
+                "message": f"Model already set to {new_model_type}.",
+                "current_model": new_model_type,
+                "label_names": get_label_names(),
+                "threshold": model_data.get("threshold"),
+                "input_size": model_data.get("input_size"),
+            }
 
-    target_model_config = _get_model_config(runtime_config, new_model_type)
-    if not target_model_config:
-        raise ValueError(f"Model configuration for '{new_model_type}' not found.")
+        runtime_config = dict(ASSETS["runtime_config"])
+        runtime_config["model_type"] = new_model_type
 
-    with RUNTIME_CONFIG_PATH.open("w", encoding="utf-8") as handle:
-        json.dump(runtime_config, handle, indent=2)
+        target_model_config = _get_model_config(runtime_config, new_model_type)
+        if not target_model_config:
+            raise ValueError(f"Model configuration for '{new_model_type}' not found.")
 
-    _reload_runtime_assets_from_disk()
+        # Load once outside model-state lock, then swap assets atomically.
+        model_data = _load_model_for_type(runtime_config, new_model_type)
 
-    return {
-        "status": "ok",
-        "message": f"Switched to {new_model_type} model.",
-        "current_model": new_model_type,
-        "label_names": get_label_names(),
-    }
+        with RUNTIME_CONFIG_PATH.open("w", encoding="utf-8") as handle:
+            json.dump(runtime_config, handle, indent=2)
+
+        with MODEL_LOCK:
+            ASSETS["runtime_config"] = runtime_config
+            ASSETS["model_type"] = new_model_type
+            ASSETS["model_data"] = model_data
+            ASSETS["input_size"] = model_data["input_size"]
+
+        return {
+            "status": "ok",
+            "message": f"Switched to {new_model_type} model.",
+            "current_model": new_model_type,
+            "label_names": get_label_names(),
+            "threshold": model_data.get("threshold"),
+            "input_size": model_data.get("input_size"),
+        }
 
 
 def start_camera() -> dict[str, Any]:

@@ -18,15 +18,12 @@
         <div class="hero-copy">
           <div class="hero-topline">
             <p class="eyebrow">Developer Tools · Runtime Monitoring</p>
-            <a class="button secondary nav-home" href="{{ url_for('index') }}"
-              >Back to Attendance App</a
-            >
           </div>
 
           <h1>Developer Tools</h1>
           <p class="lead">
-            Switch between LBPH and CBIR at runtime and monitor live prediction
-            quality indicators.
+            Switch between two CBIR pipelines at runtime and monitor live
+            prediction quality indicators.
           </p>
 
           <div class="stats stats-dev">
@@ -48,26 +45,26 @@
             <label class="field-label" for="modelSelector">Active model</label>
             <select id="modelSelector" class="feedback-select">
               <option
-                value="lbph"
+                value="cbir_method1"
                 {%
                 if
-                model_type=="lbph"
+                model_type=="cbir_method1"
                 %}selected{%
                 endif
                 %}
               >
-                LBPH
+                CBIR Method 1
               </option>
               <option
-                value="cbir"
+                value="cbir_method2"
                 {%
                 if
-                model_type=="cbir"
+                model_type=="cbir_method2"
                 %}selected{%
                 endif
                 %}
               >
-                CBIR
+                CBIR Method 2
               </option>
             </select>
             <div
@@ -76,6 +73,17 @@
               style="display: none"
             ></div>
           </div>
+
+          <div class="camera-controls">
+            <button id="cameraToggle" class="button secondary" type="button">
+              Close Camera
+            </button>
+          </div>
+          <p id="cameraHint" class="camera-hint">Loading backend stream...</p>
+
+          <a class="button secondary nav-home" href="{{ url_for('index') }}"
+            >Back to Attendance App
+          </a>
         </div>
 
         <div class="camera-panel">
@@ -83,12 +91,6 @@
             <img id="cameraVideo" alt="Live camera stream" />
             <canvas id="cameraOverlay" aria-hidden="true"></canvas>
           </div>
-          <div class="camera-controls">
-            <button id="cameraToggle" class="button secondary" type="button">
-              Close Camera
-            </button>
-          </div>
-          <p id="cameraHint" class="camera-hint">Loading backend stream...</p>
         </div>
       </section>
 
@@ -134,8 +136,12 @@
             <span>Face box</span><strong id="bboxValue">--</strong>
           </div>
           <div class="metric-row">
-            <span>Model type</span
-            ><strong id="modelType">{{ model_type|upper }}</strong>
+            <span>Preferred model</span
+            ><strong id="preferredModel">{{ model_name }}</strong>
+          </div>
+          <div class="metric-row">
+            <span>Runtime model</span
+            ><strong id="modelType">{{ model_name }}</strong>
           </div>
         </div>
       </aside>

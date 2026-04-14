@@ -1,16 +1,16 @@
-# 🎓 AttSystem — LBPH Face Attendance System
+# 🎓 AttSystem — Dual-CBIR Face Attendance System
 
-A Flask-based attendance prototype powered by an LBPH face recognizer, with live camera streaming, reinforcement feedback, and runtime retraining.
+A Flask-based attendance prototype powered by two CBIR pipelines (different preprocessing methods), with live camera streaming and runtime model switching.
 
 ---
 
 ## ✨ Features
 
 - 📷 **Live camera stream** via Flask MJPEG endpoint (OpenCV backend)
-- 🧠 **LBPH face recognition** with augmentation and multi-stage preprocessing
-- 🔁 **Reinforcement feedback loop** — confirm or correct predictions on the fly
-- ⚡ **Runtime retraining** without restarting the server
-- 🌐 **Web UI** for attendance and training management
+- 🧠 **Dual CBIR face recognition** with two preprocessing methods
+- 🔀 **Runtime switching** between CBIR Method 1 and CBIR Method 2
+- ⚡ **Notebook-based retraining** to refresh each method's index artifacts
+- 🌐 **Web UI** for attendance and developer monitoring
 
 ---
 
@@ -42,11 +42,11 @@ python -m pip install -r requirement.txt
 
 ### 2. Prepare Raw Dataset
 
-Place your images into `data/1_raw/<person_name>/`:
+Place your images into `data/face/<person_name>/`:
 
 ```
 data/
-└── 1_raw/
+└── face/
     ├── benjamin/
     │   └── *.jpg
     └── chern_tak/
@@ -55,25 +55,25 @@ data/
 
 > **Tip:** Use one folder per identity. Include varied lighting conditions and angles for best results.
 
-### 3. Run the ML Pipeline (Notebooks 1 → 3)
+### 3. Run the ML Pipelines (CBIR Method 1 + Method 2)
 
-Open and run these notebooks **in order**:
+Open and run these notebooks:
 
-| Step | Notebook                           | Output                                                    |
-| ---- | ---------------------------------- | --------------------------------------------------------- |
-| 1    | `ml/1_roi_pipeline.ipynb`          | ROI + preprocessed images (`data/2_*` through `data/6_*`) |
-| 2    | `ml/2_augmentation_pipeline.ipynb` | Augmented final set (`data/7_*`)                          |
-| 3    | `ml/3_training_pipeline.ipynb`     | LBPH models + runtime config (`models/`)                  |
+| Step | Notebook                | Output                                                           |
+| ---- | ----------------------- | ---------------------------------------------------------------- |
+| 1    | `ml/cbir_method1.ipynb` | `models/cbir_method1_index.npz`, `models/cbir_method1_meta.json` |
+| 2    | `ml/cbir_method2.ipynb` | `models/cbir_method2_index.npz`, `models/cbir_method2_meta.json` |
 
-After pipeline 3, you'll have:
+After both runs, `config/realtime_model_config.json` can switch between `cbir_method1` and `cbir_method2` at runtime.
 
-```
-models/
-├── lbph_model.yml
-├── lbph_with_aug.yml
-├── lbph.yml                    ← used at runtime
-└── realtime_model_config.json
-```
+#### Preprocessing Used By Each CBIR Method
+
+Both CBIR notebooks start from a grayscale face image, detect the largest face ROI with a Haar cascade, add a small padding around the face, and resize the result to 128 x 128 before extracting the embedding.
+
+| Method        | Preprocessing summary                                                                               |
+| ------------- | --------------------------------------------------------------------------------------------------- |
+| CBIR Method 1 | Uses CLAHE to boost local contrast, then applies a light Gaussian blur before resizing.             |
+| CBIR Method 2 | Uses global histogram equalization, then applies stronger denoising and sharpening before resizing. |
 
 ### 4. Launch the Web App
 
@@ -96,7 +96,7 @@ python main.py
 ### Step-by-Step
 
 1. Navigate to `/dev` and ensure the camera stream is live.
-2. Switch runtime model between **LBPH** and **CBIR**.
+2. Switch runtime model between **CBIR Method 1** and **CBIR Method 2**.
 3. Review live metrics such as accepted rate, known-face rate, no-face rate, and frame count.
 
 Reinforcement and retraining flow has been removed from the runtime app.
@@ -133,12 +133,15 @@ Ensure the webcam is not being used by another application. Restart the app and 
 
 ## 📁 Key Paths
 
-| Path                                | Description                   |
-| ----------------------------------- | ----------------------------- |
-| `main.py`                           | App entry point               |
-| `service/recognition_service.py`    | Runtime recognition backend   |
-| `service/camera_service.py`         | Camera stream service         |
-| `presentation/views/dev.html`       | Developer tools page template |
-| `scripts/dev.js`                    | Developer tools UI script     |
-| `models/lbph.yml`                   | Runtime LBPH model            |
-| `models/realtime_model_config.json` | Runtime model configuration   |
+| Path                                | Description                     |
+| ----------------------------------- | ------------------------------- |
+| `main.py`                           | App entry point                 |
+| `service/recognition_service.py`    | Runtime recognition backend     |
+| `service/camera_service.py`         | Camera stream service           |
+| `presentation/views/dev.html`       | Developer tools page template   |
+| `scripts/dev.js`                    | Developer tools UI script       |
+| `ml/cbir_method1.ipynb`             | CBIR method 1 training notebook |
+| `ml/cbir_method2.ipynb`             | CBIR method 2 training notebook |
+| `models/cbir_method1_index.npz`     | Runtime CBIR index (method 1)   |
+| `models/cbir_method2_index.npz`     | Runtime CBIR index (method 2)   |
+| `config/realtime_model_config.json` | Runtime model configuration     |

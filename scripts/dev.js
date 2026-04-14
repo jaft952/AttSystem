@@ -13,16 +13,51 @@ const acceptedRate = document.getElementById("acceptedRate");
 const knownRate = document.getElementById("knownRate");
 const noFaceRate = document.getElementById("noFaceRate");
 const framesProcessed = document.getElementById("framesProcessed");
+const preferredModel = document.getElementById("preferredModel");
 const modelType = document.getElementById("modelType");
+const runtimeModelName = document.getElementById("runtimeModelName");
+const runtimeThreshold = document.getElementById("runtimeThreshold");
 
 const config = window.APP_CONFIG || {};
 let actionBusy = false;
 let cameraRunning = false;
 let latestTimer = null;
 let busy = false;
-let currentModel = config.modelType || "lbph";
+let currentModel = config.modelType || "cbir_method1";
+const MODEL_PREF_KEY = "attsystem_selected_model";
 const recentStatuses = [];
 const WINDOW_SIZE = 60;
+const SUPPORTED_MODELS = ["cbir_method1", "cbir_method2"];
+
+function getModelLabel(model) {
+  if (model === "cbir_method2") {
+    return "CBIR Method 2";
+  }
+  return "CBIR Method 1";
+}
+
+function setPreferredModel(value) {
+  if (preferredModel) {
+    preferredModel.textContent = getModelLabel(
+      (value || currentModel).toLowerCase(),
+    );
+  }
+}
+
+function applyRuntimeModelUi(model, threshold) {
+  const resolvedModel = (model || currentModel || "cbir_method1").toLowerCase();
+  currentModel = resolvedModel;
+
+  if (modelType) {
+    modelType.textContent = getModelLabel(resolvedModel);
+  }
+  if (runtimeModelName) {
+    runtimeModelName.textContent = getModelLabel(resolvedModel);
+  }
+  if (runtimeThreshold && typeof threshold === "number") {
+    runtimeThreshold.textContent = String(threshold);
+  }
+}
 
 function setPredictionState(name, status, confidence, bbox) {
   predictedName.textContent = name || "Waiting...";
@@ -157,7 +192,7 @@ async function fetchLatest() {
     );
 
     updateRollingStats(prediction.status, prediction, data.frame_count);
-    modelType.textContent = (data.model_type || currentModel).toUpperCase();
+    applyRuntimeModelUi(data.model_type || currentModel);
 
     if (data.running) {
       setCameraHint("Backend stream active.");
@@ -172,7 +207,10 @@ async function fetchLatest() {
   }
 }
 
-async function startCameraStream() {
+async function startCameraStream({ ignoreBusy = false } = {}) {
+  if (actionBusy && !ignoreBusy) {
+    return;
+  }
   cameraToggle.disabled = true;
 
   try {
@@ -213,42 +251,111 @@ async function stopCameraStream() {
   setPredictionState("Waiting...", "Camera paused.", null, null);
 }
 
-async function switchModel(newModelType) {
-  if (actionBusy) {
-    return;
+function setSwitchingState(isSwitching, statusText) {
+  actionBusy = isSwitching;
+  if (modelSelector) {
+    modelSelector.disabled = isSwitching;
   }
+  if (cameraToggle) {
+    cameraToggle.disabled = isSwitching;
+  }
+  if (statusText) {
+    modelSwitchStatus.textContent = statusText;
+    modelSwitchStatus.style.display = "block";
+  }
+}
 
-  actionBusy = true;
-  modelSelector.disabled = true;
+async function applyModelPreference(targetModel, messagePrefix) {
+  const wasRunning = cameraRunning;
+  setSwitchingState(true, `${messagePrefix} ${getModelLabel(targetModel)}...`);
 
   try {
-    modelSwitchStatus.textContent = `Switching to ${newModelType.toUpperCase()}...`;
-    modelSwitchStatus.style.display = "block";
+    if (wasRunning) {
+      await stopCameraStream();
+    }
 
     const response = await fetch("/api/model/switch", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ model_type: newModelType }),
+      body: JSON.stringify({ model_type: targetModel }),
     });
 
-    const result = await response.json();
+    const result = await readJson(response);
     if (!response.ok) {
+      console.error("Model switch request failed", {
+        status: response.status,
+        targetModel,
+        error: result.error || "Failed to switch model",
+      });
       throw new Error(result.error || "Failed to switch model");
     }
 
-    currentModel = newModelType;
-    modelSwitchStatus.textContent = `Switched to ${newModelType.toUpperCase()}`;
+    const resolved = (result.current_model || targetModel).toLowerCase();
+    localStorage.setItem(MODEL_PREF_KEY, resolved);
+    setPreferredModel(resolved);
+    if (modelSelector) {
+      modelSelector.value = resolved;
+    }
+    applyRuntimeModelUi(resolved, result.threshold);
+    modelSwitchStatus.textContent = `Using ${getModelLabel(resolved)}`;
 
-    setTimeout(() => {
-      location.reload();
-    }, 800);
+    if (wasRunning) {
+      await startCameraStream({ ignoreBusy: true });
+    }
   } catch (error) {
-    modelSwitchStatus.textContent = `Error: ${error.message}`;
-    modelSelector.value = currentModel;
+    localStorage.setItem(MODEL_PREF_KEY, currentModel);
+    setPreferredModel(currentModel);
+    if (modelSelector) {
+      modelSelector.value = currentModel;
+    }
+    applyRuntimeModelUi(currentModel);
+    modelSwitchStatus.textContent = `Model switch error: ${error.message}`;
+
+    if (wasRunning) {
+      await startCameraStream({ ignoreBusy: true });
+    }
   } finally {
-    actionBusy = false;
-    modelSelector.disabled = false;
+    setSwitchingState(false);
   }
+}
+
+async function switchModel(newModelType) {
+  const normalized = String(newModelType || "").toLowerCase();
+  if (actionBusy || !SUPPORTED_MODELS.includes(normalized)) {
+    return;
+  }
+
+  if (normalized === currentModel) {
+    localStorage.setItem(MODEL_PREF_KEY, normalized);
+    setPreferredModel(normalized);
+    applyRuntimeModelUi(normalized);
+    modelSwitchStatus.textContent = `Using ${getModelLabel(normalized)}`;
+    modelSwitchStatus.style.display = "block";
+    return;
+  }
+
+  await applyModelPreference(normalized, "Switching to");
+}
+
+async function syncModelPreferenceOnLoad() {
+  const saved = localStorage.getItem(MODEL_PREF_KEY);
+  if (!saved || !SUPPORTED_MODELS.includes(saved)) {
+    localStorage.setItem(MODEL_PREF_KEY, currentModel);
+    setPreferredModel(currentModel);
+    return;
+  }
+
+  setPreferredModel(saved);
+
+  if (modelSelector) {
+    modelSelector.value = saved;
+  }
+
+  if (saved === currentModel) {
+    return;
+  }
+
+  await applyModelPreference(saved, "Applying saved model");
 }
 
 cameraToggle.addEventListener("click", async () => {
@@ -274,4 +381,8 @@ window.addEventListener("beforeunload", () => {
 });
 
 setPredictionState("Waiting...", "Starting backend camera...", null, null);
-startCameraStream();
+setPreferredModel(localStorage.getItem(MODEL_PREF_KEY) || currentModel);
+applyRuntimeModelUi(currentModel);
+syncModelPreferenceOnLoad().then(() => {
+  startCameraStream();
+});
