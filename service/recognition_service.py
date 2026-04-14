@@ -30,6 +30,8 @@ DEFAULT_MODEL_TYPE = "cbir_method1"
 DEFAULT_ACCEPTANCE_THRESHOLD = 160.0
 DEFAULT_STRICT_UNKNOWN_THRESHOLD = 100.0
 MAX_LBPH_MODEL_BYTES = 300 * 1024 * 1024
+DEFAULT_CBIR_STRICT_UNKNOWN_SIMILARITY = 0.72
+DEFAULT_CBIR_MIN_MARGIN = 0.035
 
 
 def _format_size_mb(num_bytes: int) -> str:
@@ -50,6 +52,39 @@ def resolve_strict_unknown_threshold(runtime_config: dict[str, Any], acceptance_
         strict_threshold = min(acceptance_threshold, DEFAULT_STRICT_UNKNOWN_THRESHOLD)
 
     return min(strict_threshold, acceptance_threshold, DEFAULT_STRICT_UNKNOWN_THRESHOLD)
+
+
+def resolve_cbir_strict_unknown_similarity(cbir_config: dict[str, Any], acceptance_threshold: float) -> float:
+    raw_value = cbir_config.get("similarity_strict_unknown_threshold")
+    if raw_value is None:
+        strict_threshold = max(acceptance_threshold, DEFAULT_CBIR_STRICT_UNKNOWN_SIMILARITY)
+    else:
+        try:
+            strict_threshold = float(raw_value)
+        except (TypeError, ValueError):
+            strict_threshold = max(acceptance_threshold, DEFAULT_CBIR_STRICT_UNKNOWN_SIMILARITY)
+
+    if strict_threshold <= 0:
+        strict_threshold = max(acceptance_threshold, DEFAULT_CBIR_STRICT_UNKNOWN_SIMILARITY)
+
+    return float(min(max(strict_threshold, acceptance_threshold), 0.99))
+
+
+def resolve_cbir_min_margin(cbir_config: dict[str, Any]) -> float:
+    raw_value = cbir_config.get("similarity_min_margin")
+    if raw_value is None:
+        return DEFAULT_CBIR_MIN_MARGIN
+
+    try:
+        margin = float(raw_value)
+    except (TypeError, ValueError):
+        return DEFAULT_CBIR_MIN_MARGIN
+
+    if margin < 0:
+        return 0.0
+    if margin > 0.4:
+        return 0.4
+    return margin
 
 
 def create_lbph_recognizer() -> Any:
@@ -105,12 +140,18 @@ def load_cbir_model(config: dict[str, Any], model_type: str) -> dict[str, Any]:
     label_names = meta.get("label_names", [])
     label_map = {i: name for i, name in enumerate(label_names)}
 
+    acceptance_threshold = float(cbir_config.get("similarity_threshold", 0.6))
+
     return {
         "embeddings": embeddings,
         "labels": labels,
         "label_map": label_map,
         "label_names": label_names,
-        "threshold": float(cbir_config.get("similarity_threshold", 0.6)),
+        "threshold": acceptance_threshold,
+        "strict_unknown_threshold": resolve_cbir_strict_unknown_similarity(
+            cbir_config, acceptance_threshold
+        ),
+        "min_margin": resolve_cbir_min_margin(cbir_config),
         "input_size": tuple(cbir_config.get("input_size", [128, 128])),
         "preprocess_mode": str(cbir_config.get("preprocess_mode", "method1")).strip().lower(),
         "display_name": str(cbir_config.get("display_name", model_type)).strip(),
@@ -343,6 +384,8 @@ def _predict_cbir(face_roi: np.ndarray, model_data: dict[str, Any]) -> dict[str,
     labels = model_data["labels"]
     label_map = model_data["label_map"]
     threshold = float(model_data["threshold"])
+    strict_unknown_threshold = float(model_data.get("strict_unknown_threshold", threshold))
+    min_margin = float(model_data.get("min_margin", DEFAULT_CBIR_MIN_MARGIN))
 
     face_rgb = cv2.cvtColor(face_roi, cv2.COLOR_GRAY2RGB)
     encodings = face_recognition.face_encodings(face_rgb)
@@ -364,13 +407,28 @@ def _predict_cbir(face_roi: np.ndarray, model_data: dict[str, Any]) -> dict[str,
         query_encoding = query_encoding / norm
 
     distances = sp_distance.cdist([query_encoding], embeddings, metric="cosine")[0]
-    closest_idx = int(np.argmin(distances))
+    sorted_indices = np.argsort(distances)
+    closest_idx = int(sorted_indices[0])
     closest_distance = float(distances[closest_idx])
     closest_label_id = int(labels[closest_idx])
     raw_name = label_map.get(closest_label_id, "unknown")
 
+    labels_array = np.asarray(labels)
+    different_identity_mask = labels_array != closest_label_id
+    if np.any(different_identity_mask):
+        second_distance = float(np.min(distances[different_identity_mask]))
+    else:
+        second_distance = 1.0
+
     similarity = 1.0 - closest_distance
-    accepted = similarity >= threshold
+    second_similarity = 1.0 - second_distance
+    similarity_margin = max(0.0, similarity - second_similarity)
+
+    accepted = (
+        similarity >= threshold
+        and similarity >= strict_unknown_threshold
+        and similarity_margin >= min_margin
+    )
     display_name = raw_name if accepted else "unknown"
 
     return {
@@ -380,7 +438,10 @@ def _predict_cbir(face_roi: np.ndarray, model_data: dict[str, Any]) -> dict[str,
         "confidence": float(similarity),
         "accepted": bool(accepted),
         "acceptance_threshold": threshold,
-        "strict_unknown_threshold": threshold,
+        "strict_unknown_threshold": strict_unknown_threshold,
+        "second_best_confidence": float(second_similarity),
+        "similarity_margin": float(similarity_margin),
+        "required_margin": float(min_margin),
     }
 
 
