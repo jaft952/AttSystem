@@ -1,14 +1,11 @@
 {
-  "model_type": "cbir_method1",
+  "model_type": "cbir_method2",
   "models": {
     "cbir_method1": {
       "index_path": "C:\\Users\\harry\\Documents\\school\\ip\\AttSystem\\models\\cbir_method1_index.npz",
       "meta_path": "C:\\Users\\harry\\Documents\\school\\ip\\AttSystem\\models\\cbir_method1_meta.json",
       "similarity_threshold": 0.6,
-      "input_size": [
-        128,
-        128
-      ],
+      "input_size": [128, 128],
       "preprocess_mode": "method1",
       "display_name": "CBIR Method 1",
       "notes": "CBIR pipeline using preprocessing method 1."
@@ -17,10 +14,7 @@
       "index_path": "C:\\Users\\harry\\Documents\\school\\ip\\AttSystem\\models\\cbir_method2_index.npz",
       "meta_path": "C:\\Users\\harry\\Documents\\school\\ip\\AttSystem\\models\\cbir_method2_meta.json",
       "similarity_threshold": 0.6,
-      "input_size": [
-        128,
-        128
-      ],
+      "input_size": [128, 128],
       "preprocess_mode": "method2",
       "display_name": "CBIR Method 2",
       "notes": "CBIR pipeline using preprocessing method 2."

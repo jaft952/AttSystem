@@ -340,19 +340,8 @@ if (markNow) {
   });
 }
 
-document.addEventListener("visibilitychange", async () => {
-  if (document.hidden && cameraRunning) {
-    await stopCamera();
-  }
-});
-
 window.addEventListener("beforeunload", () => {
   stopPolling();
-  if (cameraRunning && config.cameraStopUrl) {
-    fetch(config.cameraStopUrl, { method: "POST", keepalive: true }).catch(
-      () => {},
-    );
-  }
 });
 
 setHint("Starting backend stream...");

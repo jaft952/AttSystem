@@ -372,12 +372,6 @@ modelSelector.addEventListener("change", (e) => {
 
 window.addEventListener("beforeunload", () => {
   stopPolling();
-  if (cameraRunning) {
-    fetch(config.cameraStopUrl || "/api/camera/stop", {
-      method: "POST",
-      keepalive: true,
-    }).catch(() => {});
-  }
 });
 
 setPredictionState("Waiting...", "Starting backend camera...", null, null);
