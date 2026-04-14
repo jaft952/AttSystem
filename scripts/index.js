@@ -6,10 +6,6 @@ const markStatus = document.getElementById("markStatus");
 const todayDate = document.getElementById("todayDate");
 const identifiedName = document.getElementById("identifiedName");
 const identifiedStatus = document.getElementById("identifiedStatus");
-const identifiedConfidence = document.getElementById("identifiedConfidence");
-const totalCount = document.getElementById("totalCount");
-const presentCount = document.getElementById("presentCount");
-const absentCount = document.getElementById("absentCount");
 const presentList = document.getElementById("presentList");
 const absentList = document.getElementById("absentList");
 
@@ -80,9 +76,6 @@ function renderAttendance(attendance) {
     return;
   }
 
-  setText(totalCount, String(attendance.total || 0));
-  setText(presentCount, String(attendance.present_count || 0));
-  setText(absentCount, String(attendance.absent_count || 0));
   setText(todayDate, attendance.date || new Date().toISOString().slice(0, 10));
 
   if (presentList) {
@@ -224,20 +217,11 @@ async function fetchLatest() {
 
     const name = prediction.name || "Waiting...";
     const status = prediction.message || "No prediction yet.";
-    const confidence =
-      typeof prediction.confidence === "number"
-        ? prediction.confidence.toFixed(2)
-        : "--";
 
     setText(identifiedName, name);
     setText(identifiedStatus, status);
-    setText(identifiedConfidence, confidence);
 
-    if (data.running) {
-      setHint(`Camera live. Frames processed: ${data.frame_count || 0}`);
-    } else {
-      setHint("Camera is paused.");
-    }
+    setHint(data.running ? "Camera live." : "Camera is paused.");
 
     updateMarkButtonState(prediction);
   } catch (error) {

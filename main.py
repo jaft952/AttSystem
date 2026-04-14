@@ -4,14 +4,14 @@ from datetime import datetime
 from pathlib import Path
 from flask import Flask, Response, jsonify, render_template, request, send_from_directory
 
-from ml import reinforcement_pipeline as training_service
+from service import recognition_service
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 VIEWS_ROOT = PROJECT_ROOT / "presentation" / "views"
 UI_ROOT = PROJECT_ROOT / "presentation" / "ui"
 SCRIPTS_ROOT = PROJECT_ROOT / "scripts"
-ATTENDANCE_ROOT = PROJECT_ROOT / "data" / "9_attendance"
+ATTENDANCE_ROOT = PROJECT_ROOT / "data" / "attendance"
 ATTENDANCE_LOCK = threading.Lock()
 
 ATTENDANCE_ROOT.mkdir(parents=True, exist_ok=True)
@@ -43,7 +43,7 @@ def _attendance_file_path(day_key: str) -> Path:
 
 def _load_attendance(day_key: str):
     file_path = _attendance_file_path(day_key)
-    labels = sorted(training_service.get_label_names())
+    labels = sorted(recognition_service.get_label_names())
     payload = {"date": day_key, "records": {}}
 
     if file_path.exists():
@@ -196,37 +196,44 @@ def api_attendance_unmark():
     return jsonify({"status": "ok", "unmarked": label, "attendance": summary})
 
 
-@APP.get("/training")
-def training():
-    return render_template("training.html", **training_service.get_training_template_context("AttSystem"))
+@APP.get("/dev")
+def developer_tools():
+    return render_template("dev.html", **recognition_service.get_developer_tools_template_context("AttSystem"))
 
 
 @APP.get("/api/health")
 def health():
-    return jsonify(training_service.get_health_payload())
+    return jsonify(recognition_service.get_health_payload())
+
+
+@APP.post("/api/model/switch")
+def api_model_switch():
+    body = request.get_json(silent=True) or {}
+    model_type = str(body.get("model_type", "")).strip().lower()
+    
+    if not model_type:
+        return jsonify({"error": "Missing model_type parameter."}), 400
+    
+    try:
+        result = recognition_service.switch_model(model_type)
+        return jsonify(result)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    except RuntimeError as exc:
+        return jsonify({"error": str(exc)}), 409
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
 
 
 @APP.get("/api/latest")
 def api_latest():
-    return jsonify(training_service.get_latest_payload())
+    return jsonify(recognition_service.get_latest_payload())
 
 
 @APP.get("/video_feed")
 def video_feed():
     return Response(
-        training_service.stream_frames(),
-        mimetype="multipart/x-mixed-replace; boundary=frame",
-        headers={
-            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
-            "Pragma": "no-cache",
-        },
-    )
-
-
-@APP.get("/training_video_feed")
-def training_video_feed():
-    return Response(
-        training_service.stream_frames(),
+        recognition_service.stream_frames(),
         mimetype="multipart/x-mixed-replace; boundary=frame",
         headers={
             "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
@@ -243,37 +250,7 @@ def api_predict():
         return jsonify({"error": "Missing image payload."}), 400
 
     try:
-        return jsonify(training_service.predict_from_payload(image_data))
-    except Exception as exc:
-        return jsonify({"error": str(exc)}), 500
-
-
-@APP.post("/api/feedback")
-def api_feedback():
-    payload = request.get_json(silent=True) or {}
-    action = str(payload.get("action", "confirm")).strip().lower()
-    selected_label = str(payload.get("label", "")).strip()
-
-    try:
-        return jsonify(training_service.save_feedback(action, selected_label))
-    except ValueError as exc:
-        return jsonify({"error": str(exc)}), 400
-    except Exception as exc:
-        return jsonify({"error": str(exc)}), 500
-
-
-@APP.post("/api/retrain")
-def api_retrain():
-    try:
-        return jsonify(training_service.retrain_with_feedback_async())
-    except Exception as exc:
-        return jsonify({"error": str(exc)}), 500
-
-
-@APP.get("/api/retrain/status")
-def api_retrain_status():
-    try:
-        return jsonify(training_service.get_retrain_status())
+        return jsonify(recognition_service.predict_from_payload(image_data))
     except Exception as exc:
         return jsonify({"error": str(exc)}), 500
 
@@ -281,7 +258,7 @@ def api_retrain_status():
 @APP.post("/api/camera/start")
 def api_camera_start():
     try:
-        return jsonify(training_service.start_camera())
+        return jsonify(recognition_service.start_camera())
     except Exception as exc:
         return jsonify({"error": str(exc)}), 500
 
@@ -289,7 +266,7 @@ def api_camera_start():
 @APP.post("/api/camera/stop")
 def api_camera_stop():
     try:
-        return jsonify(training_service.stop_camera())
+        return jsonify(recognition_service.stop_camera())
     except Exception as exc:
         return jsonify({"error": str(exc)}), 500
 

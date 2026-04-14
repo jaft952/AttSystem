@@ -1,14 +1,30 @@
 {
-  "identity_model": "C:\\Users\\harry\\Documents\\school\\ip\\AttSystem\\models\\lbph_final.yml",
-  "identity_label_map": "c:\\Users\\harry\\Documents\\school\\ip\\AttSystem\\models\\label_map.txt",
-  "identity_confidence_threshold": 160.0,
-  "identity_strict_unknown_threshold": 100.0,
-  "input_size": [
-    128,
-    128
-  ],
+  "model_type": "lbph",
+  "models": {
+    "cbir": {
+      "index_path": "C:\\Users\\harry\\Documents\\school\\ip\\AttSystem\\models\\cbir_index.npz",
+      "meta_path": "C:\\Users\\harry\\Documents\\school\\ip\\AttSystem\\models\\cbir_meta.json",
+      "similarity_threshold": 0.6,
+      "input_size": [
+        128,
+        128
+      ],
+      "notes": "CBIR uses face embeddings with cosine similarity on L2-normalized vectors."
+    },
+    "lbph": {
+      "identity_model": "C:\\Users\\harry\\Documents\\school\\ip\\AttSystem\\models\\lbph.yml",
+      "identity_label_map": "c:\\Users\\harry\\Documents\\school\\ip\\AttSystem\\models\\label_map_lbph.txt",
+      "identity_confidence_threshold": 160.0,
+      "identity_strict_unknown_threshold": 100.0,
+      "input_size": [
+        128,
+        128
+      ],
+      "notes": "LBPH expects aligned face ROI in grayscale. lbph.yml is the model used at runtime."
+    }
+  },
   "notes": {
-    "identity": "LBPH expects aligned face ROI in grayscale.",
-    "training_flow": "lbph_model.yml and lbph_with_aug.yml are comparison checkpoints; lbph_final.yml is the model used at runtime."
+    "model_type": "Set to 'cbir' or 'lbph' to switch between classifiers.",
+    "training_flow": "Both models should be generated before runtime: run cbir.ipynb for embeddings, lbph.ipynb for classifier."
   }
 }

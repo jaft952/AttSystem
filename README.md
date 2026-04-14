@@ -71,7 +71,7 @@ After pipeline 3, you'll have:
 models/
 ├── lbph_model.yml
 ├── lbph_with_aug.yml
-├── lbph_final.yml              ← used at runtime
+├── lbph.yml                    ← used at runtime
 └── realtime_model_config.json
 ```
 
@@ -82,45 +82,31 @@ models/
 python main.py
 ```
 
-| Page                     | URL                            |
-| ------------------------ | ------------------------------ |
-| Attendance               | http://127.0.0.1:5000          |
-| Training / Reinforcement | http://127.0.0.1:5000/training |
+| Page            | URL                       |
+| --------------- | ------------------------- |
+| Attendance      | http://127.0.0.1:5000     |
+| Developer Tools | http://127.0.0.1:5000/dev |
 
 > Also accessible on your local network at `http://192.168.1.82:5000`.
 
 ---
 
-## 🔁 Reinforcement Training
+## 🧪 Developer Tools
 
 ### Step-by-Step
 
-1. Navigate to `/training` and ensure the camera stream is live.
-2. **Save feedback samples** using one of:
-   - ✅ **Confirm prediction** — when the predicted identity is correct
-   - ✏️ **Correct label** — select the right label and save
+1. Navigate to `/dev` and ensure the camera stream is live.
+2. Switch runtime model between **LBPH** and **CBIR**.
+3. Review live metrics such as accepted rate, known-face rate, no-face rate, and frame count.
 
-   Feedback is saved to:
-
-   ```
-   data/8_feedback/<label_name>/*.jpg
-   data/8_feedback/<label_name>/*.json
-   ```
-
-3. Click **"Retrain model now"** — the camera pauses during retraining and resumes automatically when done. The updated model is written to `models/lbph_final.yml`.
-
-### Clean Up Feedback (Optional)
-
-To reset reinforcement history, delete `data/8_feedback/`.
-
-> ⚠️ **Warning:** This permanently removes all feedback samples. Future retraining will fall back to the baseline dataset only.
+Reinforcement and retraining flow has been removed from the runtime app.
 
 ---
 
 ## 🛠️ Troubleshooting
 
 <details>
-<summary><strong>App exits after retrain</strong></summary>
+<summary><strong>App startup issues</strong></summary>
 
 Run only one server instance at a time. Start with:
 
@@ -137,16 +123,9 @@ Invoke-WebRequest -UseBasicParsing http://127.0.0.1:5000/api/health | Select-Obj
 </details>
 
 <details>
-<summary><strong>No face samples saved for feedback</strong></summary>
-
-Keep your face in frame before pressing Confirm or Correct. If no ROI is detected, the app rejects the feedback to avoid bad labels.
-
-</details>
-
-<details>
 <summary><strong>Camera not working</strong></summary>
 
-Ensure the webcam is not being used by another application. Restart the app and reopen `/training`.
+Ensure the webcam is not being used by another application. Restart the app and reopen `/dev`.
 
 </details>
 
@@ -154,12 +133,12 @@ Ensure the webcam is not being used by another application. Restart the app and 
 
 ## 📁 Key Paths
 
-| Path                                | Description                    |
-| ----------------------------------- | ------------------------------ |
-| `main.py`                           | App entry point                |
-| `ml/reinforcement_pipeline.py`      | Retraining backend service     |
-| `service/camera_service.py`         | Camera stream service          |
-| `presentation/views/training.html`  | Training page template         |
-| `scripts/training.js`               | Training UI script             |
-| `models/lbph_final.yml`             | Runtime face recognition model |
-| `models/realtime_model_config.json` | Runtime model configuration    |
+| Path                                | Description                   |
+| ----------------------------------- | ----------------------------- |
+| `main.py`                           | App entry point               |
+| `service/recognition_service.py`    | Runtime recognition backend   |
+| `service/camera_service.py`         | Camera stream service         |
+| `presentation/views/dev.html`       | Developer tools page template |
+| `scripts/dev.js`                    | Developer tools UI script     |
+| `models/lbph.yml`                   | Runtime LBPH model            |
+| `models/realtime_model_config.json` | Runtime model configuration   |
