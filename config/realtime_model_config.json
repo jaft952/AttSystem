@@ -7,7 +7,10 @@
       "similarity_threshold": 0.5,
       "similarity_strict_unknown_threshold": 0.5,
       "similarity_min_margin": 0.02,
-      "input_size": [128, 128],
+      "input_size": [
+        128,
+        128
+      ],
       "preprocess_mode": "method1",
       "display_name": "CBIR Method 1",
       "notes": "CBIR pipeline using preprocessing method 1."
@@ -18,7 +21,10 @@
       "similarity_threshold": 0.5,
       "similarity_strict_unknown_threshold": 0.5,
       "similarity_min_margin": 0.02,
-      "input_size": [128, 128],
+      "input_size": [
+        128,
+        128
+      ],
       "preprocess_mode": "method2",
       "display_name": "CBIR Method 2",
       "notes": "CBIR pipeline using preprocessing method 2."

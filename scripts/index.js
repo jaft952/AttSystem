@@ -22,7 +22,7 @@ let presentNames = new Set();
 const MODEL_PREF_KEY = "attsystem_selected_model";
 const SUPPORTED_MODELS = ["cbir_method1", "cbir_method2"];
 const AUTO_MARK_CONFIDENCE_THRESHOLD = 0.9;
-const AUTO_MARK_HOLD_MS = 2000;
+const AUTO_MARK_HOLD_MS = 1000;
 
 function setText(element, value) {
   if (element) {
