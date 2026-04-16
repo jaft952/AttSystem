@@ -86,6 +86,7 @@ class CameraService:
         self.thread = None
 
         if self._inference_thread is not None and self._inference_thread.is_alive():
+            # Allow up to one full inference cycle (dlib can take ~300 ms on CPU).
             self._inference_thread.join(timeout=2.0)
         self._inference_thread = None
 
@@ -111,7 +112,9 @@ class CameraService:
 
             try:
                 _annotated, prediction, face_roi = self.frame_processor(frame)
-            except Exception:
+            except Exception as exc:
+                import logging
+                logging.getLogger(__name__).warning("Inference error: %s", exc, exc_info=True)
                 continue
 
             bbox = prediction.get("bbox") if isinstance(prediction, dict) else None
