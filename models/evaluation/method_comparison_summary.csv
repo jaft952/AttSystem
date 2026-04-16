@@ -1,0 +1,3 @@
+method,gallery_vectors,eval_samples,known_samples,unknown_samples,overall_accuracy,known_accuracy,unknown_reject_rate,precision,recall,f1_score,threshold,strict_unknown_threshold,min_margin
+cbir_method2,11341,2834,2834,0,0.8733239237826393,0.8733239237826393,,1.0,0.8733239237826393,0.9323789790921078,0.6,0.72,0.035
+cbir_method1,11653,2913,2913,0,0.6038448335049776,0.6038448335049776,,1.0,0.6038448335049776,0.7529965753424658,0.6,0.72,0.035
