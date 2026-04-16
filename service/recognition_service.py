@@ -12,6 +12,10 @@ import numpy as np
 
 from service.camera_service import CameraService
 
+# Reuse a single CLAHE instance across all inference calls to avoid
+# re-allocating the tile grid every frame.
+_CLAHE = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+
 # This module lives in AttSystem/ml, so project root is one level up.
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 MODELS_ROOT = PROJECT_ROOT / "models"
@@ -341,10 +345,13 @@ def preprocess_face(
 
     mode = (preprocess_mode or "method1").lower()
     if mode == "method2":
+        # Match the training pipeline from cbir_method2.ipynb exactly:
+        # equalizeHist → bilateralFilter (edge-preserving denoise) → unsharp mask.
         roi = cv2.equalizeHist(roi)
-        roi = cv2.medianBlur(roi, 3)
+        roi = cv2.bilateralFilter(roi, d=7, sigmaColor=50, sigmaSpace=50)
+        roi = cv2.addWeighted(roi, 1.35, cv2.GaussianBlur(roi, (0, 0), 1.2), -0.35, 0)
     else:
-        roi = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8)).apply(roi)
+        roi = _CLAHE.apply(roi)
         roi = cv2.GaussianBlur(roi, (3, 3), 0)
 
     roi = cv2.resize(roi, input_size, interpolation=cv2.INTER_CUBIC)
