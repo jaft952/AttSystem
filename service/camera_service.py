@@ -18,6 +18,7 @@ class CameraService:
         self.camera_index = camera_index
         self.capture = None
         self.thread = None
+        self._inference_thread = None
         self.running = False
         self.lock = threading.Lock()
         self.frame_bytes: bytes | None = None
@@ -43,6 +44,11 @@ class CameraService:
         self.last_face_roi_cache: np.ndarray | None = None
         self.last_prediction_cache: dict[str, Any] = dict(self.latest_prediction)
 
+        # Decoupled inference: pending frame submitted by the camera loop.
+        self._pending_frame: np.ndarray | None = None
+        self._pending_frame_lock = threading.Lock()
+        self._inference_event = threading.Event()
+
     def start(self):
         if self.running:
             return
@@ -63,9 +69,14 @@ class CameraService:
         self.running = True
         self.thread = threading.Thread(target=self._update_loop, daemon=True)
         self.thread.start()
+        self._inference_thread = threading.Thread(target=self._inference_loop, daemon=True)
+        self._inference_thread.start()
 
     def stop(self):
         self.running = False
+        # Wake the inference thread so it can observe running=False and exit.
+        self._inference_event.set()
+
         if self.capture is not None:
             self.capture.release()
             self.capture = None
@@ -74,9 +85,48 @@ class CameraService:
             self.thread.join(timeout=1.0)
         self.thread = None
 
+        if self._inference_thread is not None and self._inference_thread.is_alive():
+            self._inference_thread.join(timeout=2.0)
+        self._inference_thread = None
+
         with self.lock:
             self.frame_bytes = None
             self.latest_face_roi = None
+
+    def _inference_loop(self):
+        """Background thread: runs the heavy frame_processor without blocking the camera loop."""
+        while self.running:
+            triggered = self._inference_event.wait(timeout=0.5)
+            if not self.running:
+                break
+            if not triggered:
+                continue
+            self._inference_event.clear()
+
+            with self._pending_frame_lock:
+                frame = self._pending_frame
+
+            if frame is None:
+                continue
+
+            try:
+                _annotated, prediction, face_roi = self.frame_processor(frame)
+            except Exception:
+                continue
+
+            bbox = prediction.get("bbox") if isinstance(prediction, dict) else None
+            new_face_box = (
+                (int(bbox["x"]), int(bbox["y"]), int(bbox["w"]), int(bbox["h"]))
+                if isinstance(bbox, dict)
+                else None
+            )
+
+            with self.lock:
+                self.last_prediction_cache = dict(prediction)
+                self.last_face_roi_cache = None if face_roi is None else face_roi.copy()
+                self.last_face_box = new_face_box
+                self.latest_face_roi = self.last_face_roi_cache
+                self.latest_prediction = dict(prediction)
 
     def _update_loop(self):
         while self.running and self.capture is not None:
@@ -104,30 +154,25 @@ class CameraService:
 
             frame = cv2.flip(frame, 1)
             now = time.perf_counter()
-            run_inference = (now - self.last_inference_ts) >= self.inference_interval_sec
 
-            if run_inference:
-                annotated_frame, prediction, face_roi = self.frame_processor(frame)
+            # Submit the latest frame to the inference thread at the configured rate.
+            # The inference thread always picks up the freshest frame — no queue buildup.
+            if (now - self.last_inference_ts) >= self.inference_interval_sec:
                 self.last_inference_ts = now
-                self.last_prediction_cache = dict(prediction)
-                self.last_face_roi_cache = None if face_roi is None else face_roi.copy()
+                with self._pending_frame_lock:
+                    self._pending_frame = frame.copy()
+                self._inference_event.set()
 
-                bbox = prediction.get("bbox") if isinstance(prediction, dict) else None
-                self.last_face_box = (
-                    (int(bbox["x"]), int(bbox["y"]), int(bbox["w"]), int(bbox["h"]))
-                    if isinstance(bbox, dict)
-                    else None
-                )
-            else:
-                annotated_frame = frame.copy()
-                if self.last_face_box is not None:
-                    x, y, w, h = self.last_face_box
-                    cv2.rectangle(annotated_frame, (x, y), (x + w, y + h), (255, 255, 255), 2)
+            # Encode the current frame immediately using the most-recently cached
+            # face box — never wait for inference to finish.
+            annotated_frame = frame.copy()
+            with self.lock:
+                cached_box = self.last_face_box
+                cached_prediction = dict(self.last_prediction_cache)
 
-                prediction = dict(self.last_prediction_cache)
-                if prediction.get("status") == "ok":
-                    prediction["message"] = "Prediction refreshed at low-latency cadence."
-                face_roi = self.last_face_roi_cache
+            if cached_box is not None:
+                x, y, w, h = cached_box
+                cv2.rectangle(annotated_frame, (x, y), (x + w, y + h), (255, 255, 255), 2)
 
             ok, buffer = cv2.imencode(
                 ".jpg", annotated_frame, [int(cv2.IMWRITE_JPEG_QUALITY), self.jpeg_quality]
@@ -135,8 +180,6 @@ class CameraService:
             if ok:
                 with self.lock:
                     self.frame_bytes = buffer.tobytes()
-                    self.latest_face_roi = None if face_roi is None else face_roi.copy()
-                    self.latest_prediction = prediction
                     self.last_error = None
                     self.frame_count += 1
 

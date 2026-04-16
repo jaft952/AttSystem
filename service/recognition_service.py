@@ -9,7 +9,6 @@ from typing import Any
 
 import cv2
 import numpy as np
-import scipy.spatial.distance as sp_distance
 
 from service.camera_service import CameraService
 
@@ -406,7 +405,10 @@ def _predict_cbir(face_roi: np.ndarray, model_data: dict[str, Any]) -> dict[str,
     if norm > 1e-12:
         query_encoding = query_encoding / norm
 
-    distances = sp_distance.cdist([query_encoding], embeddings, metric="cosine")[0]
+    # Both query_encoding and gallery embeddings are L2-normalised, so
+    # cosine_distance = 1 - dot(a, b).  A matrix-vector multiply is much
+    # faster than scipy.cdist for this use-case.
+    distances = 1.0 - (embeddings @ query_encoding)
     sorted_indices = np.argsort(distances)
     closest_idx = int(sorted_indices[0])
     closest_distance = float(distances[closest_idx])
