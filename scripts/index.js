@@ -146,7 +146,9 @@ function startPredictionStream() {
     try {
       const prediction = JSON.parse(event.data);
       handlePredictionUpdate(prediction);
-    } catch (_) {}
+    } catch (err) {
+      console.warn("SSE prediction parse error:", err, event.data);
+    }
   };
 
   predictionSource.onerror = function () {
@@ -413,6 +415,9 @@ async function fetchLatest() {
 }
 
 function startPolling() {
+  // Populate the UI immediately with the current prediction so there is no
+  // blank state while waiting for the first SSE message.
+  fetchLatest();
   startPredictionStream();
   if (!attendanceTimer) {
     attendanceTimer = setInterval(fetchAttendance, 2500);

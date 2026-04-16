@@ -150,6 +150,9 @@ class CameraService:
                 continue
 
             with self._prediction_condition:
+                # _prediction_condition uses self.lock as its underlying mutex,
+                # so this block is equivalent to `with self.lock:` but also
+                # allows notify_all() to wake SSE consumers.
                 self.last_prediction_cache = dict(prediction)
                 self.last_face_roi_cache = None if face_roi is None else face_roi.copy()
                 self.latest_face_roi = self.last_face_roi_cache
