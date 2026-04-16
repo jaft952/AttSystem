@@ -7,7 +7,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
-      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;700&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap"
       rel="stylesheet"
     />
     <link
@@ -16,73 +16,55 @@
     />
   </head>
   <body>
-    <main class="shell">
-      <section class="panel camera-panel">
-        <header class="panel-head">
-          <p class="eyebrow">Live Attendance</p>
-          <h1>Attendance Checking</h1>
-          <p id="todayDate" class="today">{{ today_date }}</p>
-        </header>
+    <main class="app-shell">
+      <div class="app-backdrop" aria-hidden="true"></div>
+      <section class="layout-grid">
+        <section class="panel camera-panel">
+          <header class="panel-head">
+            <p class="eyebrow">Live Attendance</p>
+            <h1>Attendance Checking</h1>
+            <p id="todayDate" class="today">{{ today_date }}</p>
+          </header>
 
-        <div class="camera-frame">
-          <img id="cameraVideo" alt="Live camera stream" />
-        </div>
+          <div class="camera-frame">
+            <img id="cameraVideo" alt="Live camera stream" />
+          </div>
 
-        <div class="identified">
-          <p class="kicker">Detected person</p>
-          <p id="identifiedName" class="name">Waiting...</p>
-          <p id="identifiedStatus" class="status">Initializing camera...</p>
-          <p class="meta">
-            Confidence: <span id="identifiedConfidence">--</span>
+          <div class="identified">
+            <p class="kicker">Detected person</p>
+            <p id="identifiedName" class="name">Waiting...</p>
+            <p id="identifiedStatus" class="status">Initializing camera...</p>
+          </div>
+
+          <div class="actions">
+            <button id="cameraToggle" class="button secondary" type="button">
+              Close Camera
+            </button>
+          </div>
+          <p id="cameraHint" class="hint">
+            Attendance is recorded automatically after a stable high-confidence
+            face is detected.
           </p>
-        </div>
+          <p id="markStatus" class="hint subtle">Ready.</p>
+        </section>
 
-        <div class="actions">
-          <button id="cameraToggle" class="button secondary" type="button">
-            Close Camera
-          </button>
-          <button id="markNow" class="button primary" type="button" disabled>
-            Mark Verified Presence
-          </button>
-        </div>
-        <p id="cameraHint" class="hint">
-          Verify the identity shown on screen before recording attendance.
-        </p>
-        <p id="markStatus" class="hint subtle">Ready.</p>
+        <aside class="panel stats-panel">
+          <section class="list-card">
+            <h2>Present Today</h2>
+            <ul id="presentList" class="name-list"></ul>
+          </section>
+
+          <section class="list-card">
+            <h2>Still Absent</h2>
+            <ul id="absentList" class="name-list"></ul>
+          </section>
+
+          <a class="link-button" href="{{ url_for('developer_tools') }}"
+            >Open Developer Tools</a
+          >
+        </aside>
       </section>
-
-      <aside class="panel stats-panel">
-        <div class="stat-grid">
-          <div class="stat-card">
-            <span>Total</span>
-            <strong id="totalCount">0</strong>
-          </div>
-          <div class="stat-card">
-            <span>Present</span>
-            <strong id="presentCount">0</strong>
-          </div>
-          <div class="stat-card">
-            <span>Absent</span>
-            <strong id="absentCount">0</strong>
-          </div>
-        </div>
-
-        <section class="list-card">
-          <h2>Present Today</h2>
-          <ul id="presentList" class="name-list"></ul>
-        </section>
-
-        <section class="list-card">
-          <h2>Still Absent</h2>
-          <ul id="absentList" class="name-list"></ul>
-        </section>
-
-        <a class="link-button" href="{{ url_for('training') }}"
-          >Open Developer Reinforcement Console</a
-        >
-      </aside>
     </main>
-
     <script>
       window.APP_CONFIG = {
         videoFeedUrl: "{{ url_for('video_feed') }}",

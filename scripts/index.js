@@ -1,15 +1,10 @@
 const cameraVideo = document.getElementById("cameraVideo");
 const cameraToggle = document.getElementById("cameraToggle");
-const markNow = document.getElementById("markNow");
 const cameraHint = document.getElementById("cameraHint");
 const markStatus = document.getElementById("markStatus");
 const todayDate = document.getElementById("todayDate");
 const identifiedName = document.getElementById("identifiedName");
 const identifiedStatus = document.getElementById("identifiedStatus");
-const identifiedConfidence = document.getElementById("identifiedConfidence");
-const totalCount = document.getElementById("totalCount");
-const presentCount = document.getElementById("presentCount");
-const absentCount = document.getElementById("absentCount");
 const presentList = document.getElementById("presentList");
 const absentList = document.getElementById("absentList");
 
@@ -18,7 +13,16 @@ let cameraRunning = false;
 let latestTimer = null;
 let attendanceTimer = null;
 let lastPrediction = null;
-let markBusy = false;
+let autoMarkState = {
+  label: null,
+  startedAt: null,
+  inFlight: false,
+};
+let presentNames = new Set();
+const MODEL_PREF_KEY = "attsystem_selected_model";
+const SUPPORTED_MODELS = ["cbir_method1", "cbir_method2"];
+const AUTO_MARK_CONFIDENCE_THRESHOLD = 0.9;
+const AUTO_MARK_HOLD_MS = 1000;
 
 function setText(element, value) {
   if (element) {
@@ -53,26 +57,80 @@ function formatTimestamp(value) {
   return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
-function canManuallyMark(prediction) {
+function canAutoMark(prediction) {
   return Boolean(
     prediction &&
     prediction.status === "ok" &&
     prediction.accepted &&
     prediction.raw_name &&
-    prediction.raw_name !== "unknown",
+    prediction.raw_name !== "unknown" &&
+    typeof prediction.confidence === "number" &&
+    prediction.confidence >= AUTO_MARK_CONFIDENCE_THRESHOLD,
   );
 }
 
-function updateMarkButtonState(prediction) {
-  if (!markNow) {
+function getAutoMarkCandidate(prediction) {
+  if (!canAutoMark(prediction)) {
+    return null;
+  }
+
+  const label = String(prediction.raw_name || "").trim();
+  if (!label || presentNames.has(label)) {
+    return null;
+  }
+
+  return {
+    label,
+    confidence: prediction.confidence,
+  };
+}
+
+function resetAutoMarkState() {
+  autoMarkState = {
+    label: null,
+    startedAt: null,
+    inFlight: false,
+  };
+}
+
+async function maybeAutoMark(prediction) {
+  const candidate = getAutoMarkCandidate(prediction);
+  if (!candidate || autoMarkState.inFlight) {
+    if (!candidate) {
+      resetAutoMarkState();
+    }
     return;
   }
 
-  const allowed = canManuallyMark(prediction);
-  markNow.disabled = !allowed || markBusy;
-  markNow.textContent = allowed
-    ? "Mark Verified Presence"
-    : "Waiting for Verification";
+  const now = Date.now();
+  if (autoMarkState.label !== candidate.label) {
+    autoMarkState.label = candidate.label;
+    autoMarkState.startedAt = now;
+    setMarkStatus(
+      `Auto-marking ${candidate.label} after 2 seconds of stable confidence...`,
+    );
+    return;
+  }
+
+  if (!autoMarkState.startedAt) {
+    autoMarkState.startedAt = now;
+    return;
+  }
+
+  const elapsed = now - autoMarkState.startedAt;
+  if (elapsed < AUTO_MARK_HOLD_MS) {
+    return;
+  }
+
+  autoMarkState.inFlight = true;
+  try {
+    await markAttendance(candidate.label, candidate.confidence);
+    setMarkStatus(`Auto-marked attendance for ${candidate.label}.`);
+    presentNames.add(candidate.label);
+  } finally {
+    autoMarkState.inFlight = false;
+    resetAutoMarkState();
+  }
 }
 
 function renderAttendance(attendance) {
@@ -80,14 +138,12 @@ function renderAttendance(attendance) {
     return;
   }
 
-  setText(totalCount, String(attendance.total || 0));
-  setText(presentCount, String(attendance.present_count || 0));
-  setText(absentCount, String(attendance.absent_count || 0));
   setText(todayDate, attendance.date || new Date().toISOString().slice(0, 10));
 
   if (presentList) {
     presentList.innerHTML = "";
     const present = Array.isArray(attendance.present) ? attendance.present : [];
+    presentNames = new Set();
     if (present.length === 0) {
       const li = document.createElement("li");
       li.className = "empty";
@@ -98,6 +154,7 @@ function renderAttendance(attendance) {
         const li = document.createElement("li");
         li.className = "present-item";
         const name = person && person.name ? person.name : "unknown";
+        presentNames.add(name);
         const seen = formatTimestamp(person && person.last_seen_at);
         const label = document.createElement("span");
         label.className = "present-label";
@@ -153,6 +210,14 @@ async function fetchAttendance() {
       throw new Error(data.error || "Could not load attendance stats.");
     }
     renderAttendance(data.attendance);
+
+    if (data.attendance && Array.isArray(data.attendance.present)) {
+      presentNames = new Set(
+        data.attendance.present
+          .map((person) => (person && person.name ? String(person.name) : ""))
+          .filter(Boolean),
+      );
+    }
   } catch (error) {
     setMarkStatus(error.message || "Could not load attendance.");
   }
@@ -163,8 +228,6 @@ async function markAttendance(name, confidence) {
     return;
   }
 
-  markBusy = true;
-  updateMarkButtonState(lastPrediction);
   try {
     const response = await fetch(config.attendanceMarkUrl, {
       method: "POST",
@@ -179,9 +242,6 @@ async function markAttendance(name, confidence) {
     renderAttendance(data.attendance);
   } catch (error) {
     setMarkStatus(error.message || "Could not mark attendance.");
-  } finally {
-    markBusy = false;
-    updateMarkButtonState(lastPrediction);
   }
 }
 
@@ -224,22 +284,12 @@ async function fetchLatest() {
 
     const name = prediction.name || "Waiting...";
     const status = prediction.message || "No prediction yet.";
-    const confidence =
-      typeof prediction.confidence === "number"
-        ? prediction.confidence.toFixed(2)
-        : "--";
 
     setText(identifiedName, name);
     setText(identifiedStatus, status);
-    setText(identifiedConfidence, confidence);
 
-    if (data.running) {
-      setHint(`Camera live. Frames processed: ${data.frame_count || 0}`);
-    } else {
-      setHint("Camera is paused.");
-    }
-
-    updateMarkButtonState(prediction);
+    setHint(data.running ? "Camera live." : "Camera is paused.");
+    await maybeAutoMark(prediction);
   } catch (error) {
     setHint(error.message || "Could not read live prediction.");
   }
@@ -309,6 +359,31 @@ async function stopCamera() {
   cameraToggle.disabled = false;
 }
 
+async function syncModelPreference() {
+  const preferred = localStorage.getItem(MODEL_PREF_KEY);
+  if (!preferred || !SUPPORTED_MODELS.includes(preferred)) {
+    return;
+  }
+
+  try {
+    const healthResponse = await fetch("/api/health", { cache: "no-store" });
+    const healthData = await readJson(healthResponse);
+    const backendModel = String(healthData.model_type || "").toLowerCase();
+
+    if (healthResponse.ok && backendModel === preferred) {
+      return;
+    }
+
+    await fetch("/api/model/switch", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model_type: preferred }),
+    });
+  } catch (_) {
+    // Ignore failures and continue with backend default.
+  }
+}
+
 if (cameraToggle) {
   cameraToggle.addEventListener("click", async () => {
     if (cameraRunning) {
@@ -319,32 +394,12 @@ if (cameraToggle) {
   });
 }
 
-if (markNow) {
-  markNow.addEventListener("click", async () => {
-    if (!canManuallyMark(lastPrediction)) {
-      setMarkStatus("Verify the identity on screen before marking attendance.");
-      return;
-    }
-    await markAttendance(lastPrediction.raw_name, lastPrediction.confidence);
-  });
-}
-
-document.addEventListener("visibilitychange", async () => {
-  if (document.hidden && cameraRunning) {
-    await stopCamera();
-  }
-});
-
 window.addEventListener("beforeunload", () => {
   stopPolling();
-  if (cameraRunning && config.cameraStopUrl) {
-    fetch(config.cameraStopUrl, { method: "POST", keepalive: true }).catch(
-      () => {},
-    );
-  }
 });
 
 setHint("Starting backend stream...");
 setMarkStatus("Ready.");
-updateMarkButtonState(lastPrediction);
-startCamera();
+syncModelPreference().then(() => {
+  startCamera();
+});
