@@ -193,11 +193,13 @@ class CameraService:
 
                 # Encode the current frame using the most-recently cached
                 # face box — never wait for inference to finish.
-                annotated_frame = frame.copy()
+                # Avoid a full-frame copy when there is no box to draw.
+                annotated_frame = frame
                 with self.lock:
                     cached_box = self.last_face_box
 
                 if cached_box is not None:
+                    annotated_frame = frame.copy()
                     x, y, w, h = cached_box
                     cv2.rectangle(annotated_frame, (x, y), (x + w, y + h), (255, 255, 255), 2)
 
@@ -228,6 +230,10 @@ class CameraService:
     def get_frame(self) -> bytes | None:
         with self.lock:
             return self.frame_bytes
+
+    def get_frame_packet(self) -> tuple[bytes | None, int]:
+        with self.lock:
+            return self.frame_bytes, self.frame_count
 
     def get_feedback_sample(self):
         with self.lock:

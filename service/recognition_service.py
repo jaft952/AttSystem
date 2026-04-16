@@ -303,18 +303,25 @@ def get_latest_payload() -> dict[str, Any]:
 
 
 def stream_frames():
+    last_sent_seq = -1
     while True:
         if not CAMERA_SERVICE.running:
             time.sleep(0.05)
             continue
 
-        frame = CAMERA_SERVICE.get_frame()
+        frame, seq = CAMERA_SERVICE.get_frame_packet()
         if frame is None:
             time.sleep(0.05)
             continue
 
+        if seq == last_sent_seq:
+            time.sleep(0.01)
+            continue
+
+        last_sent_seq = seq
+
         yield b"--frame\r\n" b"Content-Type: image/jpeg\r\n\r\n" + frame + b"\r\n"
-        time.sleep(0.005)
+        time.sleep(0.001)
 
 
 def pick_largest_face(faces: np.ndarray | None):
