@@ -43,7 +43,6 @@ class CameraService:
         self.stream_fps = max(1, min(30, stream_fps))
 
         self.last_inference_ts = 0.0
-        self.last_face_box: tuple[int, int, int, int] | None = None
         self.last_face_roi_cache: np.ndarray | None = None
         self.last_prediction_cache: dict[str, Any] = dict(self.latest_prediction)
 
@@ -64,6 +63,12 @@ class CameraService:
         # Uses self.lock as the underlying mutex so frame_bytes / frame_count
         # updates and the notify are always atomic.
         self._frame_condition = threading.Condition(self.lock)
+
+        # Prediction-ready condition: signals SSE consumers the instant a new
+        # inference result is available.  Uses self.lock so prediction state
+        # reads and the notify are always atomic.
+        self._prediction_condition = threading.Condition(self.lock)
+        self._prediction_seq: int = 0
 
     def start(self):
         if self.running:
@@ -95,6 +100,9 @@ class CameraService:
         # Wake any stream_frames() generators blocked in wait_for_next_frame().
         with self._frame_condition:
             self._frame_condition.notify_all()
+        # Wake any SSE consumers blocked in wait_for_next_prediction().
+        with self._prediction_condition:
+            self._prediction_condition.notify_all()
 
         if self.capture is not None:
             self.capture.release()
@@ -141,19 +149,16 @@ class CameraService:
                 logging.getLogger(__name__).warning("Inference error: %s", exc, exc_info=True)
                 continue
 
-            bbox = prediction.get("bbox") if isinstance(prediction, dict) else None
-            new_face_box = (
-                (int(bbox["x"]), int(bbox["y"]), int(bbox["w"]), int(bbox["h"]))
-                if isinstance(bbox, dict)
-                else None
-            )
-
-            with self.lock:
+            with self._prediction_condition:
+                # _prediction_condition uses self.lock as its underlying mutex,
+                # so this block is equivalent to `with self.lock:` but also
+                # allows notify_all() to wake SSE consumers.
                 self.last_prediction_cache = dict(prediction)
                 self.last_face_roi_cache = None if face_roi is None else face_roi.copy()
-                self.last_face_box = new_face_box
                 self.latest_face_roi = self.last_face_roi_cache
                 self.latest_prediction = dict(prediction)
+                self._prediction_seq += 1
+                self._prediction_condition.notify_all()
 
     def _update_loop(self):
         stream_interval = 1.0 / self.stream_fps
@@ -200,20 +205,11 @@ class CameraService:
             if (now - last_stream_ts) >= stream_interval:
                 last_stream_ts = now
 
-                # Encode the current frame using the most-recently cached
-                # face box — never wait for inference to finish.
-                # Avoid a full-frame copy when there is no box to draw.
-                annotated_frame = frame
-                with self.lock:
-                    cached_box = self.last_face_box
-
-                if cached_box is not None:
-                    annotated_frame = frame.copy()
-                    x, y, w, h = cached_box
-                    cv2.rectangle(annotated_frame, (x, y), (x + w, y + h), (255, 255, 255), 2)
-
+                # Encode the raw frame directly — box drawing has been moved to
+                # the browser canvas overlay so the MJPEG stream stays clean and
+                # encoding time is consistent regardless of whether a face is visible.
                 ok_enc, buffer = cv2.imencode(
-                    ".jpg", annotated_frame, [int(cv2.IMWRITE_JPEG_QUALITY), self.jpeg_quality]
+                    ".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), self.jpeg_quality]
                 )
                 if ok_enc:
                     # Notify stream consumers atomically with the frame update
@@ -250,6 +246,24 @@ class CameraService:
                     break
                 self._frame_condition.wait(timeout=remaining)
             return self.frame_bytes, self.frame_count
+
+    def wait_for_next_prediction(self, last_seq: int, timeout: float = 1.0) -> tuple[dict[str, Any], int]:
+        """Block until a new inference result is available or *timeout* elapses.
+
+        SSE consumers call this to receive prediction updates the instant
+        inference completes, rather than polling at a fixed interval.
+
+        Returns:
+            A ``(prediction, seq)`` tuple.  *seq* equals *last_seq* on timeout.
+        """
+        with self._prediction_condition:
+            deadline = time.monotonic() + timeout
+            while self._prediction_seq == last_seq and self.running:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                self._prediction_condition.wait(timeout=remaining)
+            return dict(self.latest_prediction), self._prediction_seq
 
     def get_latest(self) -> dict[str, Any]:
         with self.lock:
