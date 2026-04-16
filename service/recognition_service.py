@@ -302,6 +302,28 @@ def get_latest_payload() -> dict[str, Any]:
     return payload
 
 
+def stream_predictions():
+    """Yield prediction dicts as the inference loop produces them.
+
+    Intended for the SSE endpoint — each yielded dict is pushed to the
+    browser immediately rather than waiting for the next REST poll cycle.
+    Yields a keepalive sentinel (``None``) on timeout so the caller can
+    emit an SSE comment to prevent proxy / browser connection drops.
+    """
+    last_seq = -1
+    while True:
+        if not CAMERA_SERVICE.running:
+            time.sleep(0.1)
+            yield None  # keepalive while camera is off
+            continue
+        prediction, seq = CAMERA_SERVICE.wait_for_next_prediction(last_seq, timeout=1.0)
+        if seq != last_seq:
+            last_seq = seq
+            yield prediction
+        else:
+            yield None  # keepalive on timeout
+
+
 def stream_frames():
     last_sent_seq = -1
     while True:
