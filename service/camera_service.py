@@ -13,6 +13,7 @@ class CameraService:
         inference_interval_sec: float = 0.11,
         jpeg_quality: int = 75,
         stale_grab_count: int = 2,
+        stream_fps: int = 20,
     ):
         self.frame_processor = frame_processor
         self.camera_index = camera_index
@@ -38,11 +39,20 @@ class CameraService:
         self.inference_interval_sec = inference_interval_sec
         self.jpeg_quality = int(max(30, min(95, jpeg_quality)))
         self.stale_grab_count = max(0, stale_grab_count)
+        # Target encoded-stream frame rate (caps JPEG encoding CPU use).
+        self.stream_fps = max(1, min(30, stream_fps))
 
         self.last_inference_ts = 0.0
         self.last_face_box: tuple[int, int, int, int] | None = None
         self.last_face_roi_cache: np.ndarray | None = None
         self.last_prediction_cache: dict[str, Any] = dict(self.latest_prediction)
+
+        # Adaptive inference throttle: starts at the configured interval and
+        # is updated each cycle to equal the actual measured inference latency.
+        # This prevents submitting new frames faster than they can be processed.
+        _MIN_INFERENCE_INTERVAL = 0.05  # cap at 20 Hz maximum submission rate
+        self._min_inference_interval = _MIN_INFERENCE_INTERVAL
+        self._last_inference_duration: float = max(inference_interval_sec, _MIN_INFERENCE_INTERVAL)
 
         # Decoupled inference: pending frame submitted by the camera loop.
         self._pending_frame: np.ndarray | None = None
@@ -111,7 +121,12 @@ class CameraService:
                 continue
 
             try:
+                t0 = time.perf_counter()
                 _annotated, prediction, face_roi = self.frame_processor(frame)
+                elapsed = time.perf_counter() - t0
+                # Update adaptive interval: use the measured latency so the
+                # camera loop backs off automatically when inference is slow.
+                self._last_inference_duration = max(self._min_inference_interval, elapsed)
             except Exception as exc:
                 import logging
                 logging.getLogger(__name__).warning("Inference error: %s", exc, exc_info=True)
@@ -132,6 +147,9 @@ class CameraService:
                 self.latest_prediction = dict(prediction)
 
     def _update_loop(self):
+        stream_interval = 1.0 / self.stream_fps
+        last_stream_ts = 0.0
+
         while self.running and self.capture is not None:
             for _ in range(self.stale_grab_count):
                 self.capture.grab()
@@ -158,33 +176,39 @@ class CameraService:
             frame = cv2.flip(frame, 1)
             now = time.perf_counter()
 
-            # Submit the latest frame to the inference thread at the configured rate.
-            # The inference thread always picks up the freshest frame — no queue buildup.
-            if (now - self.last_inference_ts) >= self.inference_interval_sec:
+            # Submit the latest frame to the inference thread using the adaptive
+            # interval (actual measured inference latency). This prevents
+            # submitting frames faster than they can be processed.
+            if (now - self.last_inference_ts) >= self._last_inference_duration:
                 self.last_inference_ts = now
                 with self._pending_frame_lock:
                     self._pending_frame = frame.copy()
                 self._inference_event.set()
 
-            # Encode the current frame immediately using the most-recently cached
-            # face box — never wait for inference to finish.
-            annotated_frame = frame.copy()
-            with self.lock:
-                cached_box = self.last_face_box
-                cached_prediction = dict(self.last_prediction_cache)
+            # Throttle JPEG encoding to the target stream FPS so that encoding
+            # does not consume CPU on every camera frame (e.g. at 30 FPS input
+            # but 20 FPS stream, one in three encodes is skipped).
+            if (now - last_stream_ts) >= stream_interval:
+                last_stream_ts = now
 
-            if cached_box is not None:
-                x, y, w, h = cached_box
-                cv2.rectangle(annotated_frame, (x, y), (x + w, y + h), (255, 255, 255), 2)
-
-            ok, buffer = cv2.imencode(
-                ".jpg", annotated_frame, [int(cv2.IMWRITE_JPEG_QUALITY), self.jpeg_quality]
-            )
-            if ok:
+                # Encode the current frame using the most-recently cached
+                # face box — never wait for inference to finish.
+                annotated_frame = frame.copy()
                 with self.lock:
-                    self.frame_bytes = buffer.tobytes()
-                    self.last_error = None
-                    self.frame_count += 1
+                    cached_box = self.last_face_box
+
+                if cached_box is not None:
+                    x, y, w, h = cached_box
+                    cv2.rectangle(annotated_frame, (x, y), (x + w, y + h), (255, 255, 255), 2)
+
+                ok, buffer = cv2.imencode(
+                    ".jpg", annotated_frame, [int(cv2.IMWRITE_JPEG_QUALITY), self.jpeg_quality]
+                )
+                if ok:
+                    with self.lock:
+                        self.frame_bytes = buffer.tobytes()
+                        self.last_error = None
+                        self.frame_count += 1
 
             time.sleep(0.001)
 
