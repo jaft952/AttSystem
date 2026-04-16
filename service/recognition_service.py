@@ -349,7 +349,8 @@ def preprocess_face(
         # equalizeHist → bilateralFilter (edge-preserving denoise) → unsharp mask.
         roi = cv2.equalizeHist(roi)
         roi = cv2.bilateralFilter(roi, d=7, sigmaColor=50, sigmaSpace=50)
-        roi = cv2.addWeighted(roi, 1.35, cv2.GaussianBlur(roi, (0, 0), 1.2), -0.35, 0)
+        blurred = cv2.GaussianBlur(roi, (0, 0), 1.2)
+        roi = cv2.addWeighted(roi, 1.35, blurred, -0.35, 0)
     else:
         roi = _CLAHE.apply(roi)
         roi = cv2.GaussianBlur(roi, (3, 3), 0)
