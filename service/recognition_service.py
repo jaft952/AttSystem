@@ -467,8 +467,9 @@ def predict_face(face_roi: np.ndarray) -> dict[str, Any]:
 
 
 def process_camera_frame(frame: np.ndarray):
-    # The annotated frame returned here is discarded by the inference loop
-    # (_annotated), so there is no need to copy the frame for drawing.
+    # The annotated frame (first return value) is discarded by
+    # CameraService._inference_loop (`_annotated, prediction, face_roi = …`),
+    # so there is no need to copy the frame for drawing.
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     detect_scale = 0.6
     small_gray = cv2.resize(
