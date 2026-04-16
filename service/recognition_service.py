@@ -664,4 +664,4 @@ def stop_camera() -> dict[str, Any]:
     return {"status": "ok", "message": "Camera stopped"}
 
 
-CAMERA_SERVICE = CameraService(frame_processor=process_camera_frame)
+CAMERA_SERVICE = CameraService(frame_processor=process_camera_frame) # type: ignore
