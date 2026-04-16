@@ -395,7 +395,12 @@ def _predict_cbir(face_roi: np.ndarray, model_data: dict[str, Any]) -> dict[str,
     min_margin = float(model_data.get("min_margin", DEFAULT_CBIR_MIN_MARGIN))
 
     face_rgb = cv2.cvtColor(face_roi, cv2.COLOR_GRAY2RGB)
-    encodings = face_recognition.face_encodings(face_rgb)
+    h_roi, w_roi = face_rgb.shape[:2]
+    # Pass the full ROI as the known face location so face_recognition skips
+    # its internal HOG/CNN face detector (we already detected the face with
+    # the Haar cascade).  Location order is (top, right, bottom, left).
+    known_locations = [(0, w_roi, h_roi, 0)]
+    encodings = face_recognition.face_encodings(face_rgb, known_face_locations=known_locations)
     if len(encodings) == 0:
         return {
             "label_id": -1,
@@ -417,8 +422,8 @@ def _predict_cbir(face_roi: np.ndarray, model_data: dict[str, Any]) -> dict[str,
     # cosine_distance = 1 - dot(a, b).  A matrix-vector multiply is much
     # faster than scipy.cdist for this use-case.
     distances = 1.0 - (embeddings @ query_encoding)
-    sorted_indices = np.argsort(distances)
-    closest_idx = int(sorted_indices[0])
+    # np.argmin is O(n) — faster than argsort when only the minimum is needed.
+    closest_idx = int(np.argmin(distances))
     closest_distance = float(distances[closest_idx])
     closest_label_id = int(labels[closest_idx])
     raw_name = label_map.get(closest_label_id, "unknown")
@@ -462,7 +467,9 @@ def predict_face(face_roi: np.ndarray) -> dict[str, Any]:
 
 
 def process_camera_frame(frame: np.ndarray):
-    display = frame.copy()
+    # The annotated frame (first return value) is discarded by
+    # CameraService._inference_loop (`_annotated, prediction, face_roi = …`),
+    # so there is no need to copy the frame for drawing.
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     detect_scale = 0.6
     small_gray = cv2.resize(
@@ -505,7 +512,7 @@ def process_camera_frame(frame: np.ndarray):
             "bbox": None,
             "message": "No face detected.",
         }
-        return display, prediction, None
+        return None, prediction, None
 
     model_data = ASSETS.get("model_data", {})
     face_roi = preprocess_face(
@@ -525,11 +532,10 @@ def process_camera_frame(frame: np.ndarray):
             "bbox": None,
             "message": "Face ROI could not be prepared.",
         }
-        return display, prediction, None
+        return None, prediction, None
 
     prediction = predict_face(face_roi)
     x, y, w, h = map(int, face_box)
-    cv2.rectangle(display, (x, y), (x + w, y + h), (255, 255, 255), 2)
     prediction.update(
         {
             "status": "ok",
@@ -537,7 +543,7 @@ def process_camera_frame(frame: np.ndarray):
             "message": "Prediction updated.",
         }
     )
-    return display, prediction, None
+    return None, prediction, None
 
 
 def decode_image_data(image_data: str) -> np.ndarray:
