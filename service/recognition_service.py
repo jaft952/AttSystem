@@ -309,19 +309,20 @@ def stream_frames():
             time.sleep(0.05)
             continue
 
-        frame, seq = CAMERA_SERVICE.get_frame_packet()
+        # Block until the camera loop encodes a new JPEG frame (or 100 ms
+        # elapses).  This replaces the previous 10 ms busy-poll, eliminating
+        # up to 10 ms of unnecessary latency per frame and reducing CPU load.
+        frame, seq = CAMERA_SERVICE.wait_for_next_frame(last_sent_seq, timeout=0.1)
+
         if frame is None:
-            time.sleep(0.05)
             continue
 
         if seq == last_sent_seq:
-            time.sleep(0.01)
             continue
 
         last_sent_seq = seq
 
         yield b"--frame\r\n" b"Content-Type: image/jpeg\r\n\r\n" + frame + b"\r\n"
-        time.sleep(0.001)
 
 
 def pick_largest_face(faces: np.ndarray | None):

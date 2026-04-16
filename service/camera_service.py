@@ -59,6 +59,12 @@ class CameraService:
         self._pending_frame_lock = threading.Lock()
         self._inference_event = threading.Event()
 
+        # Frame-ready condition: signals stream consumers the instant a new
+        # JPEG is encoded so they do not need to busy-poll.
+        # Uses self.lock as the underlying mutex so frame_bytes / frame_count
+        # updates and the notify are always atomic.
+        self._frame_condition = threading.Condition(self.lock)
+
     def start(self):
         if self.running:
             return
@@ -86,6 +92,9 @@ class CameraService:
         self.running = False
         # Wake the inference thread so it can observe running=False and exit.
         self._inference_event.set()
+        # Wake any stream_frames() generators blocked in wait_for_next_frame().
+        with self._frame_condition:
+            self._frame_condition.notify_all()
 
         if self.capture is not None:
             self.capture.release()
@@ -151,12 +160,12 @@ class CameraService:
         last_stream_ts = 0.0
 
         while self.running and self.capture is not None:
-            for _ in range(self.stale_grab_count):
-                self.capture.grab()
-
-            ok, frame = self.capture.retrieve()
-            if not ok:
-                ok, frame = self.capture.read()
+            # Blocking read: waits until the camera delivers the next frame.
+            # This naturally paces the loop to the camera's frame rate (~30 Hz)
+            # instead of busy-looping at 1000 Hz with redundant grab() calls,
+            # which wasted CPU and caused GIL contention with the inference and
+            # stream threads.
+            ok, frame = self.capture.read()
 
             if not ok:
                 with self.lock:
@@ -203,20 +212,44 @@ class CameraService:
                     x, y, w, h = cached_box
                     cv2.rectangle(annotated_frame, (x, y), (x + w, y + h), (255, 255, 255), 2)
 
-                ok, buffer = cv2.imencode(
+                ok_enc, buffer = cv2.imencode(
                     ".jpg", annotated_frame, [int(cv2.IMWRITE_JPEG_QUALITY), self.jpeg_quality]
                 )
-                if ok:
-                    with self.lock:
+                if ok_enc:
+                    # Notify stream consumers atomically with the frame update
+                    # so wait_for_next_frame() wakes up immediately instead of
+                    # waiting for the next polling interval.
+                    with self._frame_condition:
                         self.frame_bytes = buffer.tobytes()
                         self.last_error = None
                         self.frame_count += 1
-
-            time.sleep(0.001)
+                        self._frame_condition.notify_all()
 
         if self.capture is not None:
             self.capture.release()
             self.capture = None
+
+    def wait_for_next_frame(self, last_seq: int, timeout: float = 0.1) -> tuple[bytes | None, int]:
+        """Block until a new encoded JPEG frame is available or *timeout* elapses.
+
+        Unlike polling with ``time.sleep``, this releases the GIL while waiting
+        so the camera loop and inference thread can run unimpeded.  Multiple
+        concurrent stream consumers (e.g. two browser tabs) are all woken by
+        ``notify_all()`` and each independently track their own *last_seq*.
+
+        Returns:
+            A ``(frame_bytes, frame_count)`` tuple.  ``frame_bytes`` is ``None``
+            when no frame has been encoded yet; ``frame_count`` is the sequence
+            number of the returned frame (equal to *last_seq* on timeout).
+        """
+        with self._frame_condition:
+            deadline = time.monotonic() + timeout
+            while self.frame_count == last_seq and self.running:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                self._frame_condition.wait(timeout=remaining)
+            return self.frame_bytes, self.frame_count
 
     def get_latest(self) -> dict[str, Any]:
         with self.lock:
