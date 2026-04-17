@@ -321,7 +321,7 @@ def pick_largest_face(faces: np.ndarray | None):
 
 
 def preprocess_face(
-    gray_frame: np.ndarray,
+    rgb_frame: np.ndarray,
     face_box,
     input_size=(128, 128),
     padding=0.20,
@@ -333,20 +333,20 @@ def preprocess_face(
 
     x1 = max(0, x - pad_x)
     y1 = max(0, y - pad_y)
-    x2 = min(gray_frame.shape[1], x + w + pad_x)
-    y2 = min(gray_frame.shape[0], y + h + pad_y)
+    x2 = min(rgb_frame.shape[1], x + w + pad_x)
+    y2 = min(rgb_frame.shape[0], y + h + pad_y)
 
-    roi = gray_frame[y1:y2, x1:x2]
+    roi = rgb_frame[y1:y2, x1:x2]
     if roi.size == 0:
         return None
 
-    mode = (preprocess_mode or "method1").lower()
-    if mode == "method2":
-        roi = cv2.equalizeHist(roi)
-        roi = cv2.medianBlur(roi, 3)
-    else:
-        roi = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8)).apply(roi)
-        roi = cv2.GaussianBlur(roi, (3, 3), 0)
+    if preprocess_mode == "method2":
+        hsv = cv2.cvtColor(roi, cv2.COLOR_RGB2HSV)
+        h_c, s_c, v_c = cv2.split(hsv)
+        clahe = cv2.createCLAHE(clipLimit=1.5, tileGridSize=(8, 8))
+        v_c = clahe.apply(v_c)
+        hsv_enhanced = cv2.merge([h_c, s_c, v_c])
+        roi = cv2.cvtColor(hsv_enhanced, cv2.COLOR_HSV2RGB)
 
     roi = cv2.resize(roi, input_size, interpolation=cv2.INTER_CUBIC)
     return roi
@@ -387,8 +387,12 @@ def _predict_cbir(face_roi: np.ndarray, model_data: dict[str, Any]) -> dict[str,
     strict_unknown_threshold = float(model_data.get("strict_unknown_threshold", threshold))
     min_margin = float(model_data.get("min_margin", DEFAULT_CBIR_MIN_MARGIN))
 
-    face_rgb = cv2.cvtColor(face_roi, cv2.COLOR_GRAY2RGB)
-    encodings = face_recognition.face_encodings(face_rgb)
+    # IMPORTANT: We keep the ROI in RGB/BGR for correct dlib embedding.
+    face_rgb = face_roi.copy() if len(face_roi.shape) == 3 else cv2.cvtColor(face_roi, cv2.COLOR_GRAY2RGB)
+    
+    h, w = face_rgb.shape[:2]
+    known_face_locations = [(0, w, h, 0)]
+    encodings = face_recognition.face_encodings(face_rgb, known_face_locations=known_face_locations)
     if len(encodings) == 0:
         return {
             "label_id": -1,
@@ -452,38 +456,35 @@ def predict_face(face_roi: np.ndarray) -> dict[str, Any]:
 
 
 def process_camera_frame(frame: np.ndarray):
+    import face_recognition
     display = frame.copy()
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    detect_scale = 0.6
-    small_gray = cv2.resize(
-        gray,
+    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    
+    fh, fw = frame.shape[:2]
+    detect_scale = min(1.0, 480.0 / min(fh, fw))
+    detect_scale = max(detect_scale, 0.5)
+
+    small_rgb = cv2.resize(
+        rgb,
         (0, 0),
         fx=detect_scale,
         fy=detect_scale,
         interpolation=cv2.INTER_AREA,
     )
-    faces = ASSETS["face_cascade"].detectMultiScale(
-        small_gray,
-        scaleFactor=1.1,
-        minNeighbors=5,
-        minSize=(30, 30),
-    )
-
-    if faces is not None and len(faces) > 0:
+    
+    locations = face_recognition.face_locations(small_rgb, model="hog")
+    
+    faces = []
+    if locations:
         inv_scale = 1.0 / detect_scale
-        faces = np.array(
-            [
-                [
-                    int(x * inv_scale),
-                    int(y * inv_scale),
-                    int(w * inv_scale),
-                    int(h * inv_scale),
-                ]
-                for (x, y, w, h) in faces
-            ],
-            dtype=np.int32,
-        )
-
+        for (top, right, bottom, left) in locations:
+            x = int(left * inv_scale)
+            y = int(top * inv_scale)
+            w = int((right - left) * inv_scale)
+            h = int((bottom - top) * inv_scale)
+            faces.append((x, y, w, h))
+            
+    faces = np.array(faces, dtype=np.int32) if len(faces) > 0 else np.array([])
     face_box = pick_largest_face(faces)
     if face_box is None:
         prediction = {
@@ -499,7 +500,7 @@ def process_camera_frame(frame: np.ndarray):
 
     model_data = ASSETS.get("model_data", {})
     face_roi = preprocess_face(
-        gray,
+        rgb,
         face_box,
         input_size=ASSETS["input_size"],
         padding=0.20,
@@ -527,7 +528,7 @@ def process_camera_frame(frame: np.ndarray):
             "message": "Prediction updated.",
         }
     )
-    return display, prediction, None
+    return display, prediction, face_roi
 
 
 def decode_image_data(image_data: str) -> np.ndarray:
@@ -542,16 +543,36 @@ def decode_image_data(image_data: str) -> np.ndarray:
 
 
 def predict_from_payload(image_data: str) -> dict[str, Any]:
+    import face_recognition
     frame = decode_image_data(image_data)
     frame = cv2.flip(frame, 1)
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    faces = ASSETS["face_cascade"].detectMultiScale(
-        gray,
-        scaleFactor=1.1,
-        minNeighbors=5,
-        minSize=(50, 50),
-    )
+    
+    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    
+    fh, fw = frame.shape[:2]
+    detect_scale = min(1.0, 480.0 / min(fh, fw))
+    detect_scale = max(detect_scale, 0.5)
 
+    small_rgb = cv2.resize(
+        rgb,
+        (0, 0),
+        fx=detect_scale,
+        fy=detect_scale,
+        interpolation=cv2.INTER_AREA,
+    )
+    
+    locations = face_recognition.face_locations(small_rgb, model="hog")
+    faces = []
+    if locations:
+        inv_scale = 1.0 / detect_scale
+        for (top, right, bottom, left) in locations:
+            x = int(left * inv_scale)
+            y = int(top * inv_scale)
+            w = int((right - left) * inv_scale)
+            h = int((bottom - top) * inv_scale)
+            faces.append((x, y, w, h))
+            
+    faces = np.array(faces, dtype=np.int32) if len(faces) > 0 else np.array([])
     face_box = pick_largest_face(faces)
     if face_box is None:
         return {
@@ -561,9 +582,9 @@ def predict_from_payload(image_data: str) -> dict[str, Any]:
 
     model_data = ASSETS.get("model_data", {})
     face_roi = preprocess_face(
-        gray,
+        rgb,
         face_box,
-        input_size=model_data.get("input_size", ASSETS["input_size"]),
+        input_size=ASSETS["input_size"],
         padding=0.20,
         preprocess_mode=str(model_data.get("preprocess_mode", "method1")),
     )

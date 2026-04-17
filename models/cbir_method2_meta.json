@@ -1,6 +1,6 @@
 {
   "embedding_dim": 128,
-  "num_vectors": 11341,
+  "num_vectors": 2240,
   "label_names": [
     "benjamin",
     "chern_tak",
@@ -25,9 +25,9 @@
     "zi_herng"
   ],
   "distance": "cosine_on_l2_normalized",
-  "source_folder": "c:\\Users\\harry\\Documents\\school\\ip\\AttSystem\\data\\face",
+  "source_folder": "c:\\Users\\jaft9\\School\\AttSystem\\data\\face",
   "preprocess_method": "method2",
-  "split_path": "c:\\Users\\harry\\Documents\\school\\ip\\AttSystem\\models\\cbir_eval_split.json",
+  "split_path": "c:\\Users\\jaft9\\School\\AttSystem\\models\\cbir_eval_split.json",
   "gallery_ratio": 0.8,
   "split_seed": 42,
   "test_images_per_identity": {
