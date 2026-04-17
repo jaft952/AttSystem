@@ -28,6 +28,7 @@
 
           <div class="camera-frame">
             <img id="cameraVideo" alt="Live camera stream" />
+            <canvas id="cameraOverlay" aria-hidden="true"></canvas>
           </div>
 
           <div class="identified">
@@ -69,6 +70,7 @@
       window.APP_CONFIG = {
         videoFeedUrl: "{{ url_for('video_feed') }}",
         latestUrl: "{{ url_for('api_latest') }}",
+        predictionStreamUrl: "{{ url_for('api_prediction_stream') }}",
         cameraStartUrl: "{{ url_for('api_camera_start') }}",
         cameraStopUrl: "{{ url_for('api_camera_stop') }}",
         attendanceTodayUrl: "{{ url_for('api_attendance_today') }}",

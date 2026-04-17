@@ -28,6 +28,10 @@ const MODEL_PREF_KEY = "attsystem_selected_model";
 const recentStatuses = [];
 const WINDOW_SIZE = 60;
 const SUPPORTED_MODELS = ["cbir_method1", "cbir_method2"];
+const BBOX_HEIGHT_SCALE = 1;
+const BBOX_UPWARD_BIAS = 0.55;
+const FRAME_W = 640;
+const FRAME_H = 480;
 
 function getModelLabel(model) {
   if (model === "cbir_method2") {
@@ -119,40 +123,82 @@ function updateRollingStats(status, prediction, frameCount) {
   framesProcessed.textContent = String(frameCount || 0);
 }
 
-function drawOverlayBbox(bbox, sourceWidth, sourceHeight) {
-  const displayWidth = cameraVideo.clientWidth;
-  const displayHeight = cameraVideo.clientHeight;
-  if (!displayWidth || !displayHeight) {
-    return;
+function expandFaceBbox(bbox, frameWidth, frameHeight) {
+  if (!bbox) {
+    return null;
   }
 
-  cameraOverlay.width = displayWidth;
-  cameraOverlay.height = displayHeight;
+  const extraHeight = bbox.h * (BBOX_HEIGHT_SCALE - 1);
+  const expandedY = bbox.y - extraHeight * BBOX_UPWARD_BIAS;
+  const expandedHeight = bbox.h + extraHeight;
+
+  const clampedX = Math.max(0, Math.min(bbox.x, frameWidth));
+  const clampedY = Math.max(0, Math.min(expandedY, frameHeight));
+  const maxWidth = Math.max(0, frameWidth - clampedX);
+  const maxHeight = Math.max(0, frameHeight - clampedY);
+
+  return {
+    x: clampedX,
+    y: clampedY,
+    w: Math.max(0, Math.min(bbox.w, maxWidth)),
+    h: Math.max(0, Math.min(expandedHeight, maxHeight)),
+  };
+}
+
+function syncOverlaySize() {
+  if (!cameraOverlay) return;
+  const w = cameraOverlay.offsetWidth;
+  const h = cameraOverlay.offsetHeight;
+  if (cameraOverlay.width !== w || cameraOverlay.height !== h) {
+    cameraOverlay.width = w;
+    cameraOverlay.height = h;
+  }
+}
+
+function drawOverlay(prediction) {
+  if (!cameraOverlay) return;
+  syncOverlaySize();
   const ctx = cameraOverlay.getContext("2d");
+  const w = cameraOverlay.width;
+  const h = cameraOverlay.height;
   if (!ctx) {
     return;
   }
 
-  ctx.clearRect(0, 0, displayWidth, displayHeight);
-  if (!bbox || !sourceWidth || !sourceHeight) {
+  ctx.clearRect(0, 0, w, h);
+  const bbox = prediction && prediction.bbox;
+  if (!bbox) {
     return;
   }
 
-  const scale = Math.min(
-    displayWidth / sourceWidth,
-    displayHeight / sourceHeight,
-  );
-  const offsetX = (displayWidth - sourceWidth * scale) / 2;
-  const offsetY = (displayHeight - sourceHeight * scale) / 2;
+  const adjustedBbox = expandFaceBbox(bbox, FRAME_W, FRAME_H);
+  if (!adjustedBbox) {
+    return;
+  }
 
-  const x = offsetX + bbox.x * scale;
-  const y = offsetY + bbox.y * scale;
-  const w = bbox.w * scale;
-  const h = bbox.h * scale;
+  const scaleX = w / FRAME_W;
+  const scaleY = h / FRAME_H;
+  const bx = adjustedBbox.x * scaleX * 0.8;
+  const by = adjustedBbox.y * scaleY;
+  const bw = adjustedBbox.w * scaleX * 1.5;
+  const bh = adjustedBbox.h * scaleY;
 
-  ctx.strokeStyle = "#f7f7f7";
+  ctx.strokeStyle = "#ffffff";
   ctx.lineWidth = 2;
-  ctx.strokeRect(x, y, w, h);
+  ctx.strokeRect(bx, by, bw, bh);
+
+  const label = String(prediction.name || prediction.raw_name || "").trim();
+  if (label) {
+    ctx.font = "bold 13px Manrope, sans-serif";
+    const textMetrics = ctx.measureText(label);
+    const textW = textMetrics.width;
+    const tagH = 20;
+    const tagY = by > tagH ? by - tagH : by + bh;
+    ctx.fillStyle = "rgba(255, 255, 255, 0.88)";
+    ctx.fillRect(bx, tagY, textW + 8, tagH);
+    ctx.fillStyle = "#09090b";
+    ctx.fillText(label, bx + 4, tagY + 14);
+  }
 }
 
 function stopPolling() {
@@ -190,6 +236,7 @@ async function fetchLatest() {
       prediction.confidence,
       prediction.bbox || null,
     );
+    drawOverlay(prediction);
 
     updateRollingStats(prediction.status, prediction, data.frame_count);
     applyRuntimeModelUi(data.model_type || currentModel);
@@ -201,6 +248,7 @@ async function fetchLatest() {
     }
   } catch (error) {
     setPredictionState("Error", error.message, null, null);
+    drawOverlay(null);
     setCameraHint(error.message);
   } finally {
     busy = false;
@@ -246,7 +294,7 @@ async function stopCameraStream() {
   cameraVideo.src = "";
   cameraToggle.textContent = "Open Camera";
   stopPolling();
-  drawOverlayBbox(null, 0, 0);
+  drawOverlay(null);
   setCameraHint("Camera stream is paused.");
   setPredictionState("Waiting...", "Camera paused.", null, null);
 }
