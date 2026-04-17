@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>{{ app_name }} | Attendance Checking</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap"
+      rel="stylesheet"
+    />
+    <link
+      rel="stylesheet"
+      href="{{ url_for('static', filename='index.css') }}"
+    />
+  </head>
+  <body>
+    <main class="app-shell">
+      <div class="app-backdrop" aria-hidden="true"></div>
+      <section class="layout-grid">
+        <section class="panel camera-panel">
+          <header class="panel-head">
+            <p class="eyebrow">Live Attendance</p>
+            <h1>Attendance Checking</h1>
+            <p id="todayDate" class="today">{{ today_date }}</p>
+          </header>
+
+          <div class="camera-frame">
+            <img id="cameraVideo" alt="Live camera stream" />
+          </div>
+
+          <div class="identified">
+            <p class="kicker">Detected person</p>
+            <p id="identifiedName" class="name">Waiting...</p>
+            <p id="identifiedStatus" class="status">Initializing camera...</p>
+          </div>
+
+          <div class="actions">
+            <button id="cameraToggle" class="button secondary" type="button">
+              Close Camera
+            </button>
+          </div>
+          <p id="cameraHint" class="hint">
+            Attendance is recorded automatically after a stable high-confidence
+            face is detected.
+          </p>
+          <p id="markStatus" class="hint subtle">Ready.</p>
+        </section>
+
+        <aside class="panel stats-panel">
+          <section class="list-card">
+            <h2>Present Today</h2>
+            <ul id="presentList" class="name-list"></ul>
+          </section>
+
+          <section class="list-card">
+            <h2>Still Absent</h2>
+            <ul id="absentList" class="name-list"></ul>
+          </section>
+
+          <a class="link-button" href="{{ url_for('developer_tools') }}"
+            >Open Developer Tools</a
+          >
+        </aside>
+      </section>
+    </main>
+    <script>
+      window.APP_CONFIG = {
+        videoFeedUrl: "{{ url_for('video_feed') }}",
+        latestUrl: "{{ url_for('api_latest') }}",
+        cameraStartUrl: "{{ url_for('api_camera_start') }}",
+        cameraStopUrl: "{{ url_for('api_camera_stop') }}",
+        attendanceTodayUrl: "{{ url_for('api_attendance_today') }}",
+        attendanceMarkUrl: "{{ url_for('api_attendance_mark') }}",
+        attendanceUnmarkUrl: "{{ url_for('api_attendance_unmark') }}",
+      };
+    </script>
+    <script src="{{ url_for('script_asset', filename='index.js') }}"></script>
+  </body>
+</html>
