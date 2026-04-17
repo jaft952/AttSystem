@@ -42,11 +42,11 @@ python -m pip install -r requirement.txt
 
 ### 2. Prepare Raw Dataset
 
-Place your images into `data/face/<person_name>/`:
+Place your raw images into `data/raw/<person_name>/`:
 
 ```
 data/
-└── face/
+└── raw/
     ├── benjamin/
     │   └── *.jpg
     └── chern_tak/
@@ -55,14 +55,32 @@ data/
 
 > **Tip:** Use one folder per identity. Include varied lighting conditions and angles for best results.
 
-### 3. Run the ML Pipelines (CBIR Method 1 + Method 2)
+### 3. Split + Augment Dataset
+
+Run `ml/augmentation.ipynb` first.
+
+It performs both steps in one run:
+
+- Splits `data/raw` into `data/train` and `data/test` (deterministic split).
+- Standardizes and augments only `data/train`.
+
+### 4. Run the ML Pipelines (CBIR Method 1 + Method 2)
 
 Open and run these notebooks:
 
-| Step | Notebook                | Output                                                           |
-| ---- | ----------------------- | ---------------------------------------------------------------- |
-| 1    | `ml/cbir_method1.ipynb` | `models/cbir_method1_index.npz`, `models/cbir_method1_meta.json` |
-| 2    | `ml/cbir_method2.ipynb` | `models/cbir_method2_index.npz`, `models/cbir_method2_meta.json` |
+| Step | Notebook                | Output                                                         |
+| ---- | ----------------------- | -------------------------------------------------------------- |
+| 1    | `ml/cbir_method1.ipynb` | `index/cbir_method1_index.npz`, `index/cbir_method1_meta.json` |
+| 2    | `ml/cbir_method2.ipynb` | `index/cbir_method2_index.npz`, `index/cbir_method2_meta.json` |
+
+Both notebooks now train from `data/train` only.
+
+### 5. Run Evaluation
+
+Run `ml/evaluation.ipynb`.
+
+- Queries are loaded only from `data/test`.
+- Gallery vectors are loaded from `index/cbir_method*_index.npz` (built from train).
 
 After both runs, `config/realtime_model_config.json` can switch between `cbir_method1` and `cbir_method2` at runtime.
 
@@ -90,7 +108,7 @@ Both CBIR notebooks start from a grayscale face image, detect the largest face R
 | CBIR Method 1 | Uses CLAHE to boost local contrast, then applies a light Gaussian blur before resizing.             |
 | CBIR Method 2 | Uses global histogram equalization, then applies stronger denoising and sharpening before resizing. |
 
-### 4. Launch the Web App
+### 6. Launch the Web App
 
 ```powershell
 .\.venv\Scripts\Activate.ps1
@@ -157,6 +175,6 @@ Ensure the webcam is not being used by another application. Restart the app and 
 | `scripts/dev.js`                    | Developer tools UI script       |
 | `ml/cbir_method1.ipynb`             | CBIR method 1 training notebook |
 | `ml/cbir_method2.ipynb`             | CBIR method 2 training notebook |
-| `models/cbir_method1_index.npz`     | Runtime CBIR index (method 1)   |
-| `models/cbir_method2_index.npz`     | Runtime CBIR index (method 2)   |
+| `index/cbir_method1_index.npz`      | Runtime CBIR index (method 1)   |
+| `index/cbir_method2_index.npz`      | Runtime CBIR index (method 2)   |
 | `config/realtime_model_config.json` | Runtime model configuration     |
