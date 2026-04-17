@@ -66,6 +66,21 @@ Open and run these notebooks:
 
 After both runs, `config/realtime_model_config.json` can switch between `cbir_method1` and `cbir_method2` at runtime.
 
+### 3.1 FAISS Index Behavior (Automatic)
+
+FAISS is now part of the default runtime pipeline.
+
+- The repository includes prebuilt FAISS files for both CBIR methods.
+- Runtime config uses project-relative paths, so cloned projects work across different machines.
+- If a FAISS file is missing but NPZ embeddings exist, the app auto-builds and saves the `.faiss` file on startup.
+
+Optional manual rebuild (only if you want to refresh indexes immediately after retraining):
+
+```powershell
+.\.venv\Scripts\Activate.ps1
+python ml/build_faiss_indexes.py --model all --overwrite
+```
+
 #### Preprocessing Used By Each CBIR Method
 
 Both CBIR notebooks start from a grayscale face image, detect the largest face ROI with a Haar cascade, add a small padding around the face, and resize the result to 128 x 128 before extracting the embedding.

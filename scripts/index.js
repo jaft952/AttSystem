@@ -25,6 +25,8 @@ const MODEL_PREF_KEY = "attsystem_selected_model";
 const SUPPORTED_MODELS = ["cbir_method1", "cbir_method2"];
 const AUTO_MARK_CONFIDENCE_THRESHOLD = 0.9;
 const AUTO_MARK_HOLD_MS = 1000;
+const BBOX_HEIGHT_SCALE = 2;
+const BBOX_UPWARD_BIAS = 0.55;
 
 // Source frame dimensions the server encodes at.
 const FRAME_W = 640;
@@ -85,6 +87,28 @@ function clearOverlay() {
   ctx.clearRect(0, 0, cameraOverlay.width, cameraOverlay.height);
 }
 
+function expandFaceBbox(bbox, frameWidth, frameHeight) {
+  if (!bbox) {
+    return null;
+  }
+
+  const extraHeight = bbox.h * (BBOX_HEIGHT_SCALE - 1);
+  const expandedY = bbox.y - extraHeight * BBOX_UPWARD_BIAS;
+  const expandedHeight = bbox.h + extraHeight;
+
+  const clampedX = Math.max(0, Math.min(bbox.x, frameWidth));
+  const clampedY = Math.max(0, Math.min(expandedY, frameHeight));
+  const maxWidth = Math.max(0, frameWidth - clampedX);
+  const maxHeight = Math.max(0, frameHeight - clampedY);
+
+  return {
+    x: clampedX,
+    y: clampedY,
+    w: Math.max(0, Math.min(bbox.w, maxWidth)),
+    h: Math.max(0, Math.min(expandedHeight, maxHeight)),
+  };
+}
+
 function drawOverlay(prediction) {
   if (!cameraOverlay) return;
   syncOverlaySize();
@@ -96,17 +120,17 @@ function drawOverlay(prediction) {
   const bbox = prediction && prediction.bbox;
   if (!bbox) return;
 
+  const adjustedBbox = expandFaceBbox(bbox, FRAME_W, FRAME_H);
+  if (!adjustedBbox) return;
+
   const scaleX = w / FRAME_W;
   const scaleY = h / FRAME_H;
-  const bx = bbox.x * scaleX;
-  const by = bbox.y * scaleY;
-  const bw = bbox.w * scaleX;
-  const bh = bbox.h * scaleY;
+  const bx = adjustedBbox.x * scaleX;
+  const by = adjustedBbox.y * scaleY;
+  const bw = adjustedBbox.w * scaleX;
+  const bh = adjustedBbox.h * scaleY;
 
-  const accepted = Boolean(prediction.accepted);
-  const color = accepted ? "#4ade80" : "#ffffff";
-
-  ctx.strokeStyle = color;
+  ctx.strokeStyle = "#ffffff";
   ctx.lineWidth = 2;
   ctx.strokeRect(bx, by, bw, bh);
 
@@ -117,9 +141,7 @@ function drawOverlay(prediction) {
     const textW = textMetrics.width;
     const tagH = 20;
     const tagY = by > tagH ? by - tagH : by + bh;
-    ctx.fillStyle = accepted
-      ? "rgba(74, 222, 128, 0.88)"
-      : "rgba(255, 255, 255, 0.88)";
+    ctx.fillStyle = "rgba(255, 255, 255, 0.88)";
     ctx.fillRect(bx, tagY, textW + 8, tagH);
     ctx.fillStyle = "#09090b";
     ctx.fillText(label, bx + 4, tagY + 14);
@@ -234,7 +256,7 @@ async function maybeAutoMark(prediction) {
     autoMarkState.label = candidate.label;
     autoMarkState.startedAt = now;
     setMarkStatus(
-      `Auto-marking ${candidate.label} after 2 seconds of stable confidence...`,
+      `Auto-marking ${candidate.label} after 1 second of stable confidence...`,
     );
     return;
   }
@@ -271,6 +293,7 @@ function renderAttendance(attendance) {
     presentList.innerHTML = "";
     const present = Array.isArray(attendance.present) ? attendance.present : [];
     presentNames = new Set();
+
     if (present.length === 0) {
       const li = document.createElement("li");
       li.className = "empty";

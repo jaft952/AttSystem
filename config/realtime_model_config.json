@@ -1,9 +1,9 @@
 {
-  "model_type": "cbir_method2",
+  "model_type": "cbir_method1",
   "models": {
     "cbir_method1": {
-      "index_path": "C:\\Users\\harry\\Documents\\school\\ip\\AttSystem\\models\\cbir_method1_index.npz",
-      "meta_path": "C:\\Users\\harry\\Documents\\school\\ip\\AttSystem\\models\\cbir_method1_meta.json",
+      "index_path": "models/cbir_method1_index.npz",
+      "meta_path": "models/cbir_method1_meta.json",
       "similarity_threshold": 0.5,
       "similarity_strict_unknown_threshold": 0.5,
       "similarity_min_margin": 0.02,
@@ -13,11 +13,12 @@
       ],
       "preprocess_mode": "method1",
       "display_name": "CBIR Method 1",
-      "notes": "CBIR pipeline using preprocessing method 1."
+      "notes": "CBIR pipeline using preprocessing method 1.",
+      "faiss_index_path": "models/cbir_method1_index.faiss"
     },
     "cbir_method2": {
-      "index_path": "C:\\Users\\harry\\Documents\\school\\ip\\AttSystem\\models\\cbir_method2_index.npz",
-      "meta_path": "C:\\Users\\harry\\Documents\\school\\ip\\AttSystem\\models\\cbir_method2_meta.json",
+      "index_path": "models/cbir_method2_index.npz",
+      "meta_path": "models/cbir_method2_meta.json",
       "similarity_threshold": 0.5,
       "similarity_strict_unknown_threshold": 0.5,
       "similarity_min_margin": 0.02,
@@ -27,7 +28,8 @@
       ],
       "preprocess_mode": "method2",
       "display_name": "CBIR Method 2",
-      "notes": "CBIR pipeline using preprocessing method 2."
+      "notes": "CBIR pipeline using preprocessing method 2.",
+      "faiss_index_path": "models/cbir_method2_index.faiss"
     }
   },
   "notes": {
