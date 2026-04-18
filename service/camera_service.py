@@ -9,7 +9,7 @@ class CameraService:
         self,
         frame_processor: Callable[[np.ndarray], tuple[np.ndarray, dict[str, Any], np.ndarray | None]],
         camera_index: int = 0,
-        inference_interval_sec: float = 0.11,
+        inference_interval_sec: float = 0.08,
         jpeg_quality: int = 75,
         stale_grab_count: int = 2,
     ):
@@ -43,6 +43,7 @@ class CameraService:
         
         self.last_face_box: tuple[int, int, int, int] | None = None
         self.prediction_ttl = 0
+        self.prediction_history = []
 
     def start(self):
         if self.running: return
@@ -127,18 +128,53 @@ class CameraService:
                         )
                     else:
                         self.last_face_box = new_box
-                    
                     self.prediction_ttl = 5
-                    self.latest_prediction = prediction
                     self.latest_face_roi = face_roi
                 else:
                     if self.prediction_ttl > 0:
                         self.prediction_ttl -= 1
                     else:
                         self.last_face_box = None
-                        self.latest_prediction = prediction
                         self.latest_face_roi = face_roi
+
+                if isinstance(prediction, dict) and prediction.get("status") == "ok":
+                    self.prediction_history.append({
+                        "name": prediction.get("raw_name", "unknown"),
+                        "confidence": prediction.get("confidence", 0.0),
+                        "accepted": prediction.get("accepted", False),
+                    })
+                else:
+                    self.prediction_history.append(None)
+
+               
+                if len(self.prediction_history) > 10:
+                    self.prediction_history.pop(0)
+
+                votes = {}
+                for p in self.prediction_history:
+                    
+                    if p is not None and p["accepted"] and p["confidence"] and p["confidence"] >= 0.50:
+                        valid_name = p["name"]
+                        if valid_name != "unknown":
+                            votes[valid_name] = votes.get(valid_name, 0) + 1
+
+                stable_name = None
+                is_stable = False
                 
+          
+                if votes:
+                    top_name, top_votes = max(votes.items(), key=lambda x: x[1])
+                    if top_votes >= 2:
+                        stable_name = top_name
+                        is_stable = True
+
+      
+                if isinstance(prediction, dict):
+                    prediction["is_stable"] = is_stable
+                    prediction["stable_name"] = stable_name
+
+                self.latest_prediction = prediction
+
             time.sleep(self.inference_interval_sec)
 
     def get_latest(self) -> dict[str, Any]:

@@ -341,12 +341,21 @@ def preprocess_face(
         return None
 
     if preprocess_mode == "method2":
-        hsv = cv2.cvtColor(roi, cv2.COLOR_RGB2HSV)
-        h_c, s_c, v_c = cv2.split(hsv)
-        clahe = cv2.createCLAHE(clipLimit=1.5, tileGridSize=(8, 8))
-        v_c = clahe.apply(v_c)
-        hsv_enhanced = cv2.merge([h_c, s_c, v_c])
-        roi = cv2.cvtColor(hsv_enhanced, cv2.COLOR_HSV2RGB)
+        gray = cv2.cvtColor(roi, cv2.COLOR_RGB2GRAY)
+        mean_brightness = np.mean(gray)
+        
+        if mean_brightness < 60:
+            gamma = 0.4
+            invGamma = 1.0 / gamma
+            table = np.array([((i / 255.0) ** invGamma) * 255 for i in np.arange(0, 256)]).astype("uint8")
+            roi = cv2.LUT(roi, table)
+
+        lab = cv2.cvtColor(roi, cv2.COLOR_RGB2LAB)
+        l_c, a_c, b_c = cv2.split(lab)
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        l_c = clahe.apply(l_c)
+        lab_enhanced = cv2.merge([l_c, a_c, b_c])
+        roi = cv2.cvtColor(lab_enhanced, cv2.COLOR_LAB2RGB)
 
     roi = cv2.resize(roi, input_size, interpolation=cv2.INTER_CUBIC)
     return roi
@@ -503,7 +512,7 @@ def process_camera_frame(frame: np.ndarray):
         rgb,
         face_box,
         input_size=ASSETS["input_size"],
-        padding=0.20,
+        padding=0.2,
         preprocess_mode=str(model_data.get("preprocess_mode", "method1")),
     )
     if face_roi is None:

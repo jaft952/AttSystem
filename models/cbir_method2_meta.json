@@ -1,6 +1,6 @@
 {
   "embedding_dim": 128,
-  "num_vectors": 2240,
+  "num_vectors": 2378,
   "label_names": [
     "benjamin",
     "chern_tak",
