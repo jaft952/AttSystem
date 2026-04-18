@@ -1,0 +1,37 @@
+{
+  "model_type": "cbir_method2",
+  "models": {
+    "cbir_method1": {
+      "index_path": "models/cbir_method1_index.npz",
+      "meta_path": "models/cbir_method1_meta.json",
+      "similarity_threshold": 0.5,
+      "similarity_strict_unknown_threshold": 0.5,
+      "similarity_min_margin": 0.02,
+      "input_size": [
+        128,
+        128
+      ],
+      "preprocess_mode": "method1",
+      "display_name": "CBIR Method 1",
+      "notes": "CBIR pipeline using preprocessing method 1."
+    },
+    "cbir_method2": {
+      "index_path": "models/cbir_method2_index.npz",
+      "meta_path": "models/cbir_method2_meta.json",
+      "similarity_threshold": 0.5,
+      "similarity_strict_unknown_threshold": 0.5,
+      "similarity_min_margin": 0.02,
+      "input_size": [
+        128,
+        128
+      ],
+      "preprocess_mode": "method2",
+      "display_name": "CBIR Method 2",
+      "notes": "CBIR pipeline using preprocessing method 2."
+    }
+  },
+  "notes": {
+    "model_type": "Set to 'cbir_method1' or 'cbir_method2' to switch between CBIR pipelines.",
+    "training_flow": "Run both CBIR preprocessing notebooks to generate method1 and method2 artifacts."
+  }
+}

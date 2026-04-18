@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>{{ app_name }} | Developer Tools</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="{{ url_for('static', filename='dev.css') }}" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <div class="app-backdrop" aria-hidden="true"></div>
+      <section class="layout-grid">
+        <section class="panel intro-panel">
+          <div class="hero-topline">
+            <p class="eyebrow">Developer Tools · Runtime Monitoring</p>
+          </div>
+
+          <h1>Developer Tools</h1>
+          <p class="lead">
+            Switch between two CBIR pipelines at runtime and monitor live
+            prediction quality indicators.
+          </p>
+
+          <div class="stats stats-dev">
+            <div class="stat-card">
+              <span class="stat-label">Runtime model</span>
+              <strong id="runtimeModelName">{{ model_name }}</strong>
+            </div>
+            <div class="stat-card">
+              <span class="stat-label">Threshold</span>
+              <strong id="runtimeThreshold">{{ threshold }}</strong>
+            </div>
+            <div class="stat-card">
+              <span class="stat-label">Input size</span>
+              <strong>{{ input_size[0] }} x {{ input_size[1] }}</strong>
+            </div>
+          </div>
+
+          <div class="model-selector-section">
+            <label class="field-label" for="modelSelector">Active model</label>
+            <select id="modelSelector" class="feedback-select">
+              <option
+                value="cbir_method1"
+                {%
+                if
+                model_type=="cbir_method1"
+                %}selected{%
+                endif
+                %}
+              >
+                CBIR Method 1
+              </option>
+              <option
+                value="cbir_method2"
+                {%
+                if
+                model_type=="cbir_method2"
+                %}selected{%
+                endif
+                %}
+              >
+                CBIR Method 2
+              </option>
+            </select>
+            <div
+              id="modelSwitchStatus"
+              class="helper-note"
+              style="display: none"
+            ></div>
+          </div>
+
+          <a class="button secondary nav-home" href="{{ url_for('index') }}"
+            >Back to Attendance App
+          </a>
+        </section>
+
+        <section class="panel camera-panel">
+          <div class="camera-frame">
+            <img id="cameraVideo" alt="Live camera stream" />
+            <canvas id="cameraOverlay" aria-hidden="true"></canvas>
+          </div>
+
+          <div class="camera-controls">
+            <button id="cameraToggle" class="button secondary" type="button">
+              Close Camera
+            </button>
+          </div>
+          <p id="cameraHint" class="camera-hint">Loading backend stream...</p>
+        </section>
+
+        <aside class="panel side-panel">
+          <div class="result-card accent">
+            <span class="result-label">Current prediction</span>
+            <div id="predictedName" class="predicted-name">Waiting...</div>
+            <div id="predictedStatus" class="result-status">
+              No prediction yet
+            </div>
+          </div>
+
+          <div class="result-card">
+            <div class="metric-row">
+              <span>Confidence</span>
+              <strong id="confidenceValue">--</strong>
+            </div>
+            <div class="bar-shell">
+              <div id="confidenceBar" class="bar-fill"></div>
+            </div>
+          </div>
+
+          <div class="result-card">
+            <div class="metric-row">
+              <span>Accepted rate</span><strong id="acceptedRate">--</strong>
+            </div>
+            <div class="metric-row">
+              <span>Known face rate</span><strong id="knownRate">--</strong>
+            </div>
+            <div class="metric-row">
+              <span>No-face rate</span><strong id="noFaceRate">--</strong>
+            </div>
+            <div class="metric-row">
+              <span>Frames processed</span
+              ><strong id="framesProcessed">0</strong>
+            </div>
+            <p class="helper-note">
+              Rates are calculated over a rolling window of recent predictions.
+            </p>
+          </div>
+
+          <div class="result-card">
+            <div class="metric-row">
+              <span>Face box</span><strong id="bboxValue">--</strong>
+            </div>
+            <div class="metric-row">
+              <span>Preferred model</span
+              ><strong id="preferredModel">{{ model_name }}</strong>
+            </div>
+            <div class="metric-row">
+              <span>Runtime model</span
+              ><strong id="modelType">{{ model_name }}</strong>
+            </div>
+          </div>
+        </aside>
+      </section>
+    </main>
+
+    <script>
+      window.APP_CONFIG = {
+        latestUrl: "{{ url_for('api_latest') }}",
+        videoFeedUrl: "{{ url_for('video_feed') }}",
+        cameraStartUrl: "{{ url_for('api_camera_start') }}",
+        cameraStopUrl: "{{ url_for('api_camera_stop') }}",
+        modelType: "{{ model_type }}",
+      };
+    </script>
+    <script src="{{ url_for('script_asset', filename='dev.js') }}"></script>
+  </body>
+</html>
