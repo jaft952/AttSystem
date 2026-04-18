@@ -341,16 +341,9 @@ def preprocess_face(
         return None
 
     if preprocess_mode == "method2":
-        gray = cv2.cvtColor(roi, cv2.COLOR_RGB2GRAY)
-        mean_brightness = np.mean(gray)
+        denoised = cv2.bilateralFilter(roi, d=5, sigmaColor=50, sigmaSpace=50)
         
-        if mean_brightness < 60:
-            gamma = 0.4
-            invGamma = 1.0 / gamma
-            table = np.array([((i / 255.0) ** invGamma) * 255 for i in np.arange(0, 256)]).astype("uint8")
-            roi = cv2.LUT(roi, table)
-
-        lab = cv2.cvtColor(roi, cv2.COLOR_RGB2LAB)
+        lab = cv2.cvtColor(denoised, cv2.COLOR_RGB2LAB)
         l_c, a_c, b_c = cv2.split(lab)
         clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
         l_c = clahe.apply(l_c)
