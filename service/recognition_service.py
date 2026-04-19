@@ -9,9 +9,20 @@ from typing import Any
 
 import cv2
 import numpy as np
-import scipy.spatial.distance as sp_distance
+
+try:
+    import faiss  # type: ignore
+
+    _FAISS_AVAILABLE = True
+except Exception:
+    faiss = None  # type: ignore[assignment]
+    _FAISS_AVAILABLE = False
 
 from service.camera_service import CameraService
+
+# Reuse a single CLAHE instance across all inference calls to avoid
+# re-allocating the tile grid every frame.
+_CLAHE = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
 
 # This module lives in AttSystem/ml, so project root is one level up.
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -122,17 +133,59 @@ def _get_model_config(config: dict[str, Any], model_type: str) -> dict[str, Any]
     return {}
 
 
+def _resolve_config_path(path_value: Any) -> Path:
+    raw = str(path_value or "").strip()
+    if not raw:
+        return Path("")
+    path = Path(raw).expanduser()
+    if not path.is_absolute():
+        path = (PROJECT_ROOT / path).resolve()
+    return path
+
+
 def load_cbir_model(config: dict[str, Any], model_type: str) -> dict[str, Any]:
     cbir_config = _get_model_config(config, model_type)
-    index_path = Path(cbir_config.get("index_path", ""))
-    meta_path = Path(cbir_config.get("meta_path", ""))
+    index_path = _resolve_config_path(cbir_config.get("index_path", ""))
+    meta_path = _resolve_config_path(cbir_config.get("meta_path", ""))
 
     if not index_path.exists() or not meta_path.exists():
         raise FileNotFoundError(f"CBIR index or meta not found: {index_path}, {meta_path}")
 
     index_data = np.load(index_path, allow_pickle=True)
-    embeddings = index_data["embeddings"].astype(np.float32)
-    labels = index_data["labels"]
+    embeddings = np.ascontiguousarray(index_data["embeddings"].astype(np.float32))
+    labels = np.asarray(index_data["labels"], dtype=np.int32)
+
+    # Normalize once at load-time so both NumPy and FAISS cosine/IP search
+    # paths can reuse the same unit-length vectors.
+    norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
+    norms = np.maximum(norms, 1e-12)
+    embeddings = embeddings / norms
+
+    faiss_index = None
+    faiss_index_path = index_path.with_suffix(".faiss")
+    if _FAISS_AVAILABLE and embeddings.size > 0 and faiss is not None:
+        configured_faiss_path = _resolve_config_path(cbir_config.get("faiss_index_path", ""))
+        if str(configured_faiss_path).strip() != "":
+            faiss_index_path = configured_faiss_path
+
+        try:
+            if faiss_index_path.exists():
+                candidate = faiss.read_index(str(faiss_index_path))
+                if int(getattr(candidate, "d", -1)) == int(embeddings.shape[1]):
+                    faiss_index = candidate
+        except Exception:
+            faiss_index = None
+
+        if faiss_index is None:
+            candidate = faiss.IndexFlatIP(int(embeddings.shape[1]))
+            candidate.add(embeddings)  # type: ignore[call-arg]
+            faiss_index = candidate
+            # Persist auto-built FAISS so subsequent startups skip rebuilding.
+            try:
+                faiss_index_path.parent.mkdir(parents=True, exist_ok=True)
+                faiss.write_index(candidate, str(faiss_index_path))
+            except Exception:
+                pass
 
     with meta_path.open("r", encoding="utf-8") as handle:
         meta = json.load(handle)
@@ -145,8 +198,11 @@ def load_cbir_model(config: dict[str, Any], model_type: str) -> dict[str, Any]:
     return {
         "embeddings": embeddings,
         "labels": labels,
+        "labels_array": labels,
         "label_map": label_map,
         "label_names": label_names,
+        "faiss_index": faiss_index,
+        "faiss_enabled": bool(faiss_index is not None),
         "threshold": acceptance_threshold,
         "strict_unknown_threshold": resolve_cbir_strict_unknown_similarity(
             cbir_config, acceptance_threshold
@@ -299,19 +355,48 @@ def get_latest_payload() -> dict[str, Any]:
     return payload
 
 
+def stream_predictions():
+    """Yield prediction dicts as the inference loop produces them.
+
+    Intended for the SSE endpoint — each yielded dict is pushed to the
+    browser immediately rather than waiting for the next REST poll cycle.
+    Yields a keepalive sentinel (``None``) on timeout so the caller can
+    emit an SSE comment to prevent proxy / browser connection drops.
+    """
+    last_seq = -1
+    while True:
+        if not CAMERA_SERVICE.running:
+            time.sleep(0.1)
+            yield None  # keepalive while camera is off
+            continue
+        prediction, seq = CAMERA_SERVICE.wait_for_next_prediction(last_seq, timeout=1.0)
+        if seq != last_seq:
+            last_seq = seq
+            yield prediction
+        else:
+            yield None  # keepalive on timeout
+
+
 def stream_frames():
+    last_sent_seq = -1
     while True:
         if not CAMERA_SERVICE.running:
             time.sleep(0.05)
             continue
 
-        frame = CAMERA_SERVICE.get_frame()
+        frame, seq = CAMERA_SERVICE.wait_for_next_frame(last_sent_seq, timeout=0.1)
         if frame is None:
             time.sleep(0.05)
             continue
 
+        if seq == last_sent_seq:
+            time.sleep(0.01)
+            continue
+
+        last_sent_seq = seq
+
         yield b"--frame\r\n" b"Content-Type: image/jpeg\r\n\r\n" + frame + b"\r\n"
-        time.sleep(0.005)
+        time.sleep(0.001)
 
 
 def pick_largest_face(faces: np.ndarray | None):
@@ -340,15 +425,25 @@ def preprocess_face(
     if roi.size == 0:
         return None
 
-    if preprocess_mode == "method2":
+    mode = (preprocess_mode or "method1").lower()
+    if mode == "method2":
         denoised = cv2.bilateralFilter(roi, d=5, sigmaColor=50, sigmaSpace=50)
-        
         lab = cv2.cvtColor(denoised, cv2.COLOR_RGB2LAB)
-        l_c, a_c, b_c = cv2.split(lab)
+        lc, ac, bc = cv2.split(lab)
         clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-        l_c = clahe.apply(l_c)
-        lab_enhanced = cv2.merge([l_c, a_c, b_c])
+        lc = clahe.apply(lc)
+        lab_enhanced = cv2.merge([lc, ac, bc])
         roi = cv2.cvtColor(lab_enhanced, cv2.COLOR_LAB2RGB)
+    elif mode == "method3":
+        if len(roi.shape) == 3:
+            roi = cv2.cvtColor(roi, cv2.COLOR_RGB2GRAY)
+        roi = cv2.equalizeHist(roi)
+        roi = cv2.bilateralFilter(roi, d=7, sigmaColor=50, sigmaSpace=50)
+        blurred = cv2.GaussianBlur(roi, (0, 0), 1.2)
+        roi = cv2.addWeighted(roi, 1.35, blurred, -0.35, 0)
+        roi = cv2.cvtColor(roi, cv2.COLOR_GRAY2RGB)
+    else:
+        pass
 
     roi = cv2.resize(roi, input_size, interpolation=cv2.INTER_CUBIC)
     return roi
@@ -384,17 +479,21 @@ def _predict_cbir(face_roi: np.ndarray, model_data: dict[str, Any]) -> dict[str,
 
     embeddings = model_data["embeddings"]
     labels = model_data["labels"]
+    labels_array = model_data.get("labels_array", np.asarray(labels, dtype=np.int32))
     label_map = model_data["label_map"]
+    faiss_index = model_data.get("faiss_index")
+    faiss_enabled = bool(model_data.get("faiss_enabled", False) and faiss_index is not None)
     threshold = float(model_data["threshold"])
     strict_unknown_threshold = float(model_data.get("strict_unknown_threshold", threshold))
     min_margin = float(model_data.get("min_margin", DEFAULT_CBIR_MIN_MARGIN))
 
-    # IMPORTANT: We keep the ROI in RGB/BGR for correct dlib embedding.
     face_rgb = face_roi.copy() if len(face_roi.shape) == 3 else cv2.cvtColor(face_roi, cv2.COLOR_GRAY2RGB)
-    
-    h, w = face_rgb.shape[:2]
-    known_face_locations = [(0, w, h, 0)]
-    encodings = face_recognition.face_encodings(face_rgb, known_face_locations=known_face_locations)
+    h_roi, w_roi = face_rgb.shape[:2]
+    # Pass the full ROI as the known face location so face_recognition skips
+    # its internal HOG/CNN face detector (we already detected the face with
+    # the Haar cascade).  Location order is (top, right, bottom, left).
+    known_locations = [(0, w_roi, h_roi, 0)]
+    encodings = face_recognition.face_encodings(face_rgb, known_face_locations=known_locations)
     if len(encodings) == 0:
         return {
             "label_id": -1,
@@ -412,22 +511,58 @@ def _predict_cbir(face_roi: np.ndarray, model_data: dict[str, Any]) -> dict[str,
     if norm > 1e-12:
         query_encoding = query_encoding / norm
 
-    distances = sp_distance.cdist([query_encoding], embeddings, metric="cosine")[0]
-    sorted_indices = np.argsort(distances)
-    closest_idx = int(sorted_indices[0])
-    closest_distance = float(distances[closest_idx])
-    closest_label_id = int(labels[closest_idx])
-    raw_name = label_map.get(closest_label_id, "unknown")
+    if faiss_enabled:
+        # Query a shortlist instead of scanning all vectors in Python.
+        k = int(min(len(labels_array), 16))
+        q = np.ascontiguousarray(query_encoding.reshape(1, -1), dtype=np.float32)
+        similarities, indices = faiss_index.search(q, k)  # type: ignore[union-attr]
 
-    labels_array = np.asarray(labels)
-    different_identity_mask = labels_array != closest_label_id
-    if np.any(different_identity_mask):
-        second_distance = float(np.min(distances[different_identity_mask]))
+        valid_positions = [
+            int(pos)
+            for pos in indices[0].tolist()
+            if isinstance(pos, (int, np.integer)) and int(pos) >= 0
+        ]
+        if len(valid_positions) == 0:
+            return {
+                "label_id": -1,
+                "raw_name": "unknown",
+                "name": "unknown",
+                "confidence": 0.0,
+                "accepted": False,
+                "acceptance_threshold": threshold,
+                "strict_unknown_threshold": strict_unknown_threshold,
+                "message": "No nearest neighbor candidates found.",
+            }
+
+        closest_idx = valid_positions[0]
+        closest_label_id = int(labels_array[closest_idx])
+        raw_name = label_map.get(closest_label_id, "unknown")
+        similarity = float(similarities[0][0])
+
+        second_similarity = 0.0
+        for rank, idx in enumerate(valid_positions[1:], start=1):
+            if int(labels_array[idx]) != closest_label_id:
+                second_similarity = float(similarities[0][rank])
+                break
     else:
-        second_distance = 1.0
+        # Fallback path when FAISS is unavailable.
+        distances = 1.0 - (embeddings @ query_encoding)
+        closest_idx = int(np.argmin(distances))
+        closest_distance = float(distances[closest_idx])
+        closest_label_id = int(labels_array[closest_idx])
+        raw_name = label_map.get(closest_label_id, "unknown")
 
-    similarity = 1.0 - closest_distance
-    second_similarity = 1.0 - second_distance
+        different_identity_mask = labels_array != closest_label_id
+        if np.any(different_identity_mask):
+            second_distance = float(np.min(distances[different_identity_mask]))
+        else:
+            second_distance = 1.0
+
+        similarity = 1.0 - closest_distance
+        second_similarity = 1.0 - second_distance
+
+    similarity = float(max(-1.0, min(1.0, similarity)))
+    second_similarity = float(max(-1.0, min(1.0, second_similarity)))
     similarity_margin = max(0.0, similarity - second_similarity)
 
     accepted = (
@@ -459,7 +594,6 @@ def predict_face(face_roi: np.ndarray) -> dict[str, Any]:
 
 def process_camera_frame(frame: np.ndarray):
     import face_recognition
-    display = frame.copy()
     rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     
     fh, fw = frame.shape[:2]
@@ -498,13 +632,13 @@ def process_camera_frame(frame: np.ndarray):
             "bbox": None,
             "message": "No face detected.",
         }
-        return display, prediction, None
+        return None, prediction, None
 
     model_data = ASSETS.get("model_data", {})
     face_roi = preprocess_face(
         rgb,
         face_box,
-        input_size=ASSETS["input_size"],
+        input_size=ASSETS.get("input_size", (128, 128)),
         padding=0.2,
         preprocess_mode=str(model_data.get("preprocess_mode", "method1")),
     )
@@ -518,11 +652,10 @@ def process_camera_frame(frame: np.ndarray):
             "bbox": None,
             "message": "Face ROI could not be prepared.",
         }
-        return display, prediction, None
+        return None, prediction, None
 
     prediction = predict_face(face_roi)
     x, y, w, h = map(int, face_box)
-    cv2.rectangle(display, (x, y), (x + w, y + h), (255, 255, 255), 2)
     prediction.update(
         {
             "status": "ok",
@@ -530,7 +663,39 @@ def process_camera_frame(frame: np.ndarray):
             "message": "Prediction updated.",
         }
     )
-    return display, prediction, face_roi
+    return None, prediction, face_roi
+
+
+    model_data = ASSETS.get("model_data", {})
+    face_roi = preprocess_face(
+        gray,
+        face_box,
+        input_size=ASSETS["input_size"],
+        padding=0.20,
+        preprocess_mode=str(model_data.get("preprocess_mode", "method1")),
+    )
+    if face_roi is None:
+        prediction = {
+            "status": "invalid_roi",
+            "name": "Invalid ROI",
+            "raw_name": "unknown",
+            "confidence": None,
+            "accepted": False,
+            "bbox": None,
+            "message": "Face ROI could not be prepared.",
+        }
+        return None, prediction, None
+
+    prediction = predict_face(face_roi)
+    x, y, w, h = map(int, face_box)
+    prediction.update(
+        {
+            "status": "ok",
+            "bbox": {"x": x, "y": y, "w": w, "h": h},
+            "message": "Prediction updated.",
+        }
+    )
+    return None, prediction, None
 
 
 def decode_image_data(image_data: str) -> np.ndarray:
@@ -586,7 +751,7 @@ def predict_from_payload(image_data: str) -> dict[str, Any]:
     face_roi = preprocess_face(
         rgb,
         face_box,
-        input_size=ASSETS["input_size"],
+        input_size=ASSETS.get("input_size", (128, 128)),
         padding=0.20,
         preprocess_mode=str(model_data.get("preprocess_mode", "method1")),
     )
@@ -642,6 +807,9 @@ def switch_model(new_model_type: str) -> dict[str, Any]:
             ASSETS["model_data"] = model_data
             ASSETS["input_size"] = model_data["input_size"]
 
+        if CAMERA_SERVICE.running:
+            CAMERA_SERVICE.restart_inference_worker()
+
         return {
             "status": "ok",
             "message": f"Switched to {new_model_type} model.",
@@ -664,4 +832,9 @@ def stop_camera() -> dict[str, Any]:
     return {"status": "ok", "message": "Camera stopped"}
 
 
-CAMERA_SERVICE = CameraService(frame_processor=process_camera_frame)
+CAMERA_SERVICE = CameraService(
+    frame_processor=process_camera_frame,
+    inference_interval_sec=0.12,
+    jpeg_quality=65,
+    stream_fps=15,
+) # type: ignore

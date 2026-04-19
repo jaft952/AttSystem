@@ -1,4 +1,5 @@
 const cameraVideo = document.getElementById("cameraVideo");
+const cameraOverlay = document.getElementById("cameraOverlay");
 const cameraToggle = document.getElementById("cameraToggle");
 const cameraHint = document.getElementById("cameraHint");
 const markStatus = document.getElementById("markStatus");
@@ -10,6 +11,7 @@ const absentList = document.getElementById("absentList");
 
 const config = window.APP_CONFIG || {};
 let cameraRunning = false;
+let predictionSource = null;
 let latestTimer = null;
 let attendanceTimer = null;
 let lastPrediction = null;
@@ -23,6 +25,12 @@ const MODEL_PREF_KEY = "attsystem_selected_model";
 const SUPPORTED_MODELS = ["cbir_method1", "cbir_method2"];
 const AUTO_MARK_CONFIDENCE_THRESHOLD = 0.9;
 const AUTO_MARK_HOLD_MS = 1000;
+const BBOX_HEIGHT_SCALE = 2;
+const BBOX_UPWARD_BIAS = 0.55;
+
+// Source frame dimensions the server encodes at.
+const FRAME_W = 640;
+const FRAME_H = 480;
 
 function setText(element, value) {
   if (element) {
@@ -55,6 +63,147 @@ function formatTimestamp(value) {
     return value;
   }
   return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+// ---------------------------------------------------------------------------
+// Canvas overlay — draws the face bounding box in the browser so the MJPEG
+// stream carries raw frames only (consistent encode time, lower CPU cost).
+// ---------------------------------------------------------------------------
+
+function syncOverlaySize() {
+  if (!cameraOverlay) return;
+  const w = cameraOverlay.offsetWidth;
+  const h = cameraOverlay.offsetHeight;
+  if (cameraOverlay.width !== w || cameraOverlay.height !== h) {
+    cameraOverlay.width = w;
+    cameraOverlay.height = h;
+  }
+}
+
+function clearOverlay() {
+  if (!cameraOverlay) return;
+  syncOverlaySize();
+  const ctx = cameraOverlay.getContext("2d");
+  ctx.clearRect(0, 0, cameraOverlay.width, cameraOverlay.height);
+}
+
+function expandFaceBbox(bbox, frameWidth, frameHeight) {
+  if (!bbox) {
+    return null;
+  }
+
+  const extraHeight = bbox.h * (BBOX_HEIGHT_SCALE - 1);
+  const expandedY = bbox.y - extraHeight * BBOX_UPWARD_BIAS;
+  const expandedHeight = bbox.h + extraHeight;
+
+  const clampedX = Math.max(0, Math.min(bbox.x, frameWidth));
+  const clampedY = Math.max(0, Math.min(expandedY, frameHeight));
+  const maxWidth = Math.max(0, frameWidth - clampedX);
+  const maxHeight = Math.max(0, frameHeight - clampedY);
+
+  return {
+    x: clampedX,
+    y: clampedY,
+    w: Math.max(0, Math.min(bbox.w, maxWidth)),
+    h: Math.max(0, Math.min(expandedHeight, maxHeight)),
+  };
+}
+
+function drawOverlay(prediction) {
+  if (!cameraOverlay) return;
+  syncOverlaySize();
+  const ctx = cameraOverlay.getContext("2d");
+  const w = cameraOverlay.width;
+  const h = cameraOverlay.height;
+  ctx.clearRect(0, 0, w, h);
+
+  const bbox = prediction && prediction.bbox;
+  if (!bbox) return;
+
+  const adjustedBbox = expandFaceBbox(bbox, FRAME_W, FRAME_H);
+  if (!adjustedBbox) return;
+
+  const scaleX = w / FRAME_W;
+  const scaleY = h / FRAME_H;
+  const bx = adjustedBbox.x * scaleX;
+  const by = adjustedBbox.y * scaleY;
+  const bw = adjustedBbox.w * scaleX;
+  const bh = adjustedBbox.h * scaleY;
+
+  ctx.strokeStyle = "#ffffff";
+  ctx.lineWidth = 2;
+  ctx.strokeRect(bx, by, bw, bh);
+
+  const label = prediction.name || "";
+  if (label) {
+    ctx.font = "bold 13px Manrope, sans-serif";
+    const textMetrics = ctx.measureText(label);
+    const textW = textMetrics.width;
+    const tagH = 20;
+    const tagY = by > tagH ? by - tagH : by + bh;
+    ctx.fillStyle = "rgba(255, 255, 255, 0.88)";
+    ctx.fillRect(bx, tagY, textW + 8, tagH);
+    ctx.fillStyle = "#09090b";
+    ctx.fillText(label, bx + 4, tagY + 14);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// SSE prediction stream — replaces the 450 ms REST poll
+// ---------------------------------------------------------------------------
+
+function startPredictionStream() {
+  if (!config.predictionStreamUrl) {
+    // No SSE URL: fall back to polling
+    if (!latestTimer) {
+      latestTimer = setInterval(fetchLatest, 450);
+    }
+    return;
+  }
+  if (predictionSource) return;
+
+  predictionSource = new EventSource(config.predictionStreamUrl);
+
+  predictionSource.onmessage = function (event) {
+    try {
+      const prediction = JSON.parse(event.data);
+      handlePredictionUpdate(prediction);
+    } catch (err) {
+      console.warn("SSE prediction parse error:", err, event.data);
+    }
+  };
+
+  predictionSource.onerror = function () {
+    // SSE connection lost — close it and fall back to REST polling.
+    if (predictionSource) {
+      predictionSource.close();
+      predictionSource = null;
+    }
+    if (cameraRunning && !latestTimer) {
+      latestTimer = setInterval(fetchLatest, 450);
+    }
+  };
+}
+
+function stopPredictionStream() {
+  if (predictionSource) {
+    predictionSource.close();
+    predictionSource = null;
+  }
+  if (latestTimer) {
+    clearInterval(latestTimer);
+    latestTimer = null;
+  }
+}
+
+function handlePredictionUpdate(prediction) {
+  lastPrediction = prediction;
+  const name = prediction.name || "Waiting...";
+  const status = prediction.message || "No prediction yet.";
+  setText(identifiedName, name);
+  setText(identifiedStatus, status);
+  drawOverlay(prediction);
+  maybeAutoMark(prediction);
 }
 
 function canAutoMark(prediction) {
@@ -107,7 +256,7 @@ async function maybeAutoMark(prediction) {
     autoMarkState.label = candidate.label;
     autoMarkState.startedAt = now;
     setMarkStatus(
-      `Auto-marking ${candidate.label} after 2 seconds of stable confidence...`,
+      `Auto-marking ${candidate.label} after 1 second of stable confidence...`,
     );
     return;
   }
@@ -144,6 +293,7 @@ function renderAttendance(attendance) {
     presentList.innerHTML = "";
     const present = Array.isArray(attendance.present) ? attendance.present : [];
     presentNames = new Set();
+
     if (present.length === 0) {
       const li = document.createElement("li");
       li.className = "empty";
@@ -280,37 +430,26 @@ async function fetchLatest() {
     }
 
     const prediction = data.prediction || {};
-    lastPrediction = prediction;
-
-    const name = prediction.name || "Waiting...";
-    const status = prediction.message || "No prediction yet.";
-
-    setText(identifiedName, name);
-    setText(identifiedStatus, status);
-
+    handlePredictionUpdate(prediction);
     setHint(data.running ? "Camera live." : "Camera is paused.");
-    await maybeAutoMark(prediction);
   } catch (error) {
     setHint(error.message || "Could not read live prediction.");
   }
 }
 
 function startPolling() {
-  if (!latestTimer) {
-    latestTimer = setInterval(fetchLatest, 450);
-  }
+  // Populate the UI immediately with the current prediction so there is no
+  // blank state while waiting for the first SSE message.
+  fetchLatest();
+  startPredictionStream();
   if (!attendanceTimer) {
     attendanceTimer = setInterval(fetchAttendance, 2500);
   }
-  fetchLatest();
   fetchAttendance();
 }
 
 function stopPolling() {
-  if (latestTimer) {
-    clearInterval(latestTimer);
-    latestTimer = null;
-  }
+  stopPredictionStream();
   if (attendanceTimer) {
     clearInterval(attendanceTimer);
     attendanceTimer = null;
@@ -353,6 +492,7 @@ async function stopCamera() {
   cameraRunning = false;
   cameraVideo.removeAttribute("src");
   cameraVideo.src = "";
+  clearOverlay();
   cameraToggle.textContent = "Open Camera";
   setHint("Camera paused.");
   stopPolling();

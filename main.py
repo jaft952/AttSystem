@@ -2,7 +2,7 @@ import json
 import threading
 from datetime import datetime
 from pathlib import Path
-from flask import Flask, Response, jsonify, render_template, request, send_from_directory
+from flask import Flask, Response, jsonify, render_template, request, send_from_directory, stream_with_context
 
 from service import recognition_service
 
@@ -223,6 +223,31 @@ def api_model_switch():
         return jsonify({"error": str(exc)}), 409
     except Exception as exc:
         return jsonify({"error": str(exc)}), 500
+
+
+@APP.get("/api/prediction/stream")
+def api_prediction_stream():
+    """SSE endpoint: pushes a prediction event each time inference completes.
+
+    Replaces the client-side 450 ms REST poll with a push-based channel so
+    the browser receives results within milliseconds of inference finishing.
+    """
+    def generate():
+        for prediction in recognition_service.stream_predictions():
+            if prediction is None:
+                yield ": keepalive\n\n"
+            else:
+                yield f"data: {json.dumps(prediction)}\n\n"
+
+    return Response(
+        stream_with_context(generate()),
+        mimetype="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
 
 
 @APP.get("/api/latest")
