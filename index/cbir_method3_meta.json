@@ -1,0 +1,31 @@
+{
+  "embedding_dim": 128,
+  "num_vectors": 3498,
+  "label_names": [
+    "benjamin",
+    "chern_tak",
+    "chillien",
+    "daniel",
+    "dylan",
+    "han_soon",
+    "harry",
+    "isaac",
+    "jing_ang",
+    "jun_wei",
+    "kang_kai",
+    "marion",
+    "ms_nurul",
+    "qi_xuan",
+    "shuang_quan",
+    "wee_xuan",
+    "xiang_yue",
+    "xu_sheng",
+    "yoke_hong",
+    "yong_kang",
+    "zi_herng"
+  ],
+  "distance": "euclidean",
+  "source_folder": "c:\\Users\\jaft9\\School\\AttSystem\\data\\face",
+  "split_path": "c:\\Users\\jaft9\\School\\AttSystem\\index\\cbir_eval_split.json",
+  "preprocess_method": "method3"
+}

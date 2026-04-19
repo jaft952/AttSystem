@@ -4,6 +4,7 @@ import shutil
 import threading
 import time
 import tempfile
+import mediapipe as mp
 from pathlib import Path
 from typing import Any
 
@@ -30,12 +31,11 @@ MODELS_ROOT = PROJECT_ROOT / "models"
 CONFIG_ROOT = PROJECT_ROOT / "config"
 
 RUNTIME_CONFIG_PATH = CONFIG_ROOT / "realtime_model_config.json"
-HAAR_CASCADE_PATH = (
-    Path(cv2.__file__).resolve().parent / "data" / "haarcascade_frontalface_default.xml"
-)
+SSD_PROTOTXT_PATH = MODELS_ROOT / "ssd" / "deploy.prototxt"
+SSD_MODEL_PATH = MODELS_ROOT / "ssd" / "res10.caffemodel"
 MODEL_LOCK = threading.Lock()
 MODEL_SWITCH_LOCK = threading.Lock()
-CBIR_MODEL_TYPES = {"cbir_method1", "cbir_method2"}
+CBIR_MODEL_TYPES = {"cbir_method1", "cbir_method2", "cbir_method3"}
 DEFAULT_MODEL_TYPE = "cbir_method1"
 
 DEFAULT_ACCEPTANCE_THRESHOLD = 160.0
@@ -301,16 +301,31 @@ def load_runtime_assets() -> dict[str, Any]:
         model_data = load_cbir_model(runtime_config, fallback_type)
         loaded_model_type = fallback_type
 
-    face_cascade = cv2.CascadeClassifier(str(HAAR_CASCADE_PATH))
-    if face_cascade.empty():
-        raise RuntimeError(f"Failed to load Haar cascade: {HAAR_CASCADE_PATH}")
+    try:
+        import mediapipe as mp
+        from mediapipe.tasks.python import vision as mp_vision
+        FaceDetector = mp_vision.FaceDetector
+        FaceDetectorOptions = mp_vision.FaceDetectorOptions
+        BaseOptions = mp.tasks.BaseOptions
+        
+        model_path = MODELS_ROOT / "blaze_face_short_range.tflite"
+        if not model_path.exists():
+            raise FileNotFoundError(f"Missing MediaPipe model: {model_path}")
+            
+        options = FaceDetectorOptions(
+            base_options=BaseOptions(model_asset_path=str(model_path)),
+            min_detection_confidence=0.5
+        )
+        face_detector = FaceDetector.create_from_options(options)
+    except ImportError:
+        raise RuntimeError("MediaPipe is missing. Please install it using 'pip install mediapipe'.")
 
     return {
         "runtime_config": runtime_config,
         "model_type": loaded_model_type,
         "model_data": model_data,
         "input_size": model_data["input_size"],
-        "face_cascade": face_cascade,
+        "face_detector": face_detector,
     }
 
 
@@ -350,6 +365,7 @@ def get_health_payload() -> dict[str, Any]:
 
 
 def get_latest_payload() -> dict[str, Any]:
+    CAMERA_SERVICE.keep_alive()
     payload = CAMERA_SERVICE.get_latest()
     payload["model_type"] = ASSETS.get("model_type", DEFAULT_MODEL_TYPE)
     return payload
@@ -365,6 +381,7 @@ def stream_predictions():
     """
     last_seq = -1
     while True:
+        CAMERA_SERVICE.keep_alive()
         if not CAMERA_SERVICE.running:
             time.sleep(0.1)
             yield None  # keepalive while camera is off
@@ -380,6 +397,7 @@ def stream_predictions():
 def stream_frames():
     last_sent_seq = -1
     while True:
+        CAMERA_SERVICE.keep_alive()
         if not CAMERA_SERVICE.running:
             time.sleep(0.05)
             continue
@@ -406,36 +424,72 @@ def pick_largest_face(faces: np.ndarray | None):
 
 
 def preprocess_face(
-    gray_frame: np.ndarray,
+    rgb_frame: np.ndarray,
     face_box,
     input_size=(128, 128),
     padding=0.20,
     preprocess_mode: str = "method1",
 ):
     x, y, w, h = face_box
+
+    # Face Alignment: align rotation based on eye landmarks
+    css_location = [(y, x + w, y + h, x)]
+    try:
+        import face_recognition
+        # Use "small" model for 5-point landmarks (EXTREMELY FAST compared to default 68-point)
+        landmarks = face_recognition.face_landmarks(rgb_frame, css_location, model="small")
+        if landmarks and "left_eye" in landmarks[0] and "right_eye" in landmarks[0]:
+            left_eye_points = landmarks[0]["left_eye"]
+            right_eye_points = landmarks[0]["right_eye"]
+            
+            left_center = np.mean(left_eye_points, axis=0).astype(int)
+            right_center = np.mean(right_eye_points, axis=0).astype(int)
+            
+            dy = right_center[1] - left_center[1]
+            dx = right_center[0] - left_center[0]
+            angle = np.degrees(np.arctan2(dy, dx))
+            
+            eyes_center = (
+                int((left_center[0] + right_center[0]) / 2.0),
+                int((left_center[1] + right_center[1]) / 2.0)
+            )
+            
+            M = cv2.getRotationMatrix2D(eyes_center, angle, 1.0)
+            rgb_frame = cv2.warpAffine(rgb_frame, M, (rgb_frame.shape[1], rgb_frame.shape[0]), flags=cv2.INTER_CUBIC, borderMode=cv2.BORDER_REPLICATE)
+    except Exception:
+        pass # Skip alignment if libraries fail
+
     pad_x = int(w * padding)
     pad_y = int(h * padding)
 
     x1 = max(0, x - pad_x)
     y1 = max(0, y - pad_y)
-    x2 = min(gray_frame.shape[1], x + w + pad_x)
-    y2 = min(gray_frame.shape[0], y + h + pad_y)
+    x2 = min(rgb_frame.shape[1], x + w + pad_x)
+    y2 = min(rgb_frame.shape[0], y + h + pad_y)
 
-    roi = gray_frame[y1:y2, x1:x2]
+    roi = rgb_frame[y1:y2, x1:x2]
     if roi.size == 0:
         return None
 
     mode = (preprocess_mode or "method1").lower()
     if mode == "method2":
-        # Match the training pipeline from cbir_method2.ipynb exactly:
-        # equalizeHist → bilateralFilter (edge-preserving denoise) → unsharp mask.
+        denoised = cv2.bilateralFilter(roi, d=5, sigmaColor=50, sigmaSpace=50)
+        lab = cv2.cvtColor(denoised, cv2.COLOR_RGB2LAB)
+        lc, ac, bc = cv2.split(lab)
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        lc = clahe.apply(lc)
+        lab_enhanced = cv2.merge([lc, ac, bc])
+        roi = cv2.cvtColor(lab_enhanced, cv2.COLOR_LAB2RGB)
+    elif mode == "method3":
+        if len(roi.shape) == 3:
+            roi = cv2.cvtColor(roi, cv2.COLOR_RGB2GRAY)
         roi = cv2.equalizeHist(roi)
         roi = cv2.bilateralFilter(roi, d=7, sigmaColor=50, sigmaSpace=50)
         blurred = cv2.GaussianBlur(roi, (0, 0), 1.2)
         roi = cv2.addWeighted(roi, 1.35, blurred, -0.35, 0)
+        roi = cv2.cvtColor(roi, cv2.COLOR_GRAY2RGB)
     else:
-        roi = _CLAHE.apply(roi)
-        roi = cv2.GaussianBlur(roi, (3, 3), 0)
+        pass
 
     roi = cv2.resize(roi, input_size, interpolation=cv2.INTER_CUBIC)
     return roi
@@ -479,7 +533,7 @@ def _predict_cbir(face_roi: np.ndarray, model_data: dict[str, Any]) -> dict[str,
     strict_unknown_threshold = float(model_data.get("strict_unknown_threshold", threshold))
     min_margin = float(model_data.get("min_margin", DEFAULT_CBIR_MIN_MARGIN))
 
-    face_rgb = cv2.cvtColor(face_roi, cv2.COLOR_GRAY2RGB)
+    face_rgb = face_roi.copy() if len(face_roi.shape) == 3 else cv2.cvtColor(face_roi, cv2.COLOR_GRAY2RGB)
     h_roi, w_roi = face_rgb.shape[:2]
     # Pass the full ROI as the known face location so face_recognition skips
     # its internal HOG/CNN face detector (we already detected the face with
@@ -585,40 +639,18 @@ def predict_face(face_roi: np.ndarray) -> dict[str, Any]:
 
 
 def process_camera_frame(frame: np.ndarray):
-    # The annotated frame (first return value) is discarded by
-    # CameraService._inference_loop (`_annotated, prediction, face_roi = …`),
-    # so there is no need to copy the frame for drawing.
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    detect_scale = 0.6
-    small_gray = cv2.resize(
-        gray,
-        (0, 0),
-        fx=detect_scale,
-        fy=detect_scale,
-        interpolation=cv2.INTER_AREA,
-    )
-    faces = ASSETS["face_cascade"].detectMultiScale(
-        small_gray,
-        scaleFactor=1.1,
-        minNeighbors=5,
-        minSize=(30, 30),
-    )
-
-    if faces is not None and len(faces) > 0:
-        inv_scale = 1.0 / detect_scale
-        faces = np.array(
-            [
-                [
-                    int(x * inv_scale),
-                    int(y * inv_scale),
-                    int(w * inv_scale),
-                    int(h * inv_scale),
-                ]
-                for (x, y, w, h) in faces
-            ],
-            dtype=np.int32,
-        )
-
+    face_detector = ASSETS.get("face_detector")
+    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    
+    mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+    results = face_detector.detect(mp_image)
+    
+    faces = []
+    if results.detections:
+        for detection in results.detections:
+            bbox = detection.bounding_box
+            faces.append((max(0, bbox.origin_x), max(0, bbox.origin_y), bbox.width, bbox.height))
+            
     face_box = pick_largest_face(faces)
     if face_box is None:
         prediction = {
@@ -634,10 +666,10 @@ def process_camera_frame(frame: np.ndarray):
 
     model_data = ASSETS.get("model_data", {})
     face_roi = preprocess_face(
-        gray,
+        rgb,
         face_box,
-        input_size=ASSETS["input_size"],
-        padding=0.20,
+        input_size=ASSETS.get("input_size", (128, 128)),
+        padding=0.2,
         preprocess_mode=str(model_data.get("preprocess_mode", "method1")),
     )
     if face_roi is None:
@@ -661,8 +693,7 @@ def process_camera_frame(frame: np.ndarray):
             "message": "Prediction updated.",
         }
     )
-    return None, prediction, None
-
+    return None, prediction, face_roi
 
 def decode_image_data(image_data: str) -> np.ndarray:
     if "," in image_data:
@@ -678,14 +709,18 @@ def decode_image_data(image_data: str) -> np.ndarray:
 def predict_from_payload(image_data: str) -> dict[str, Any]:
     frame = decode_image_data(image_data)
     frame = cv2.flip(frame, 1)
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    faces = ASSETS["face_cascade"].detectMultiScale(
-        gray,
-        scaleFactor=1.1,
-        minNeighbors=5,
-        minSize=(50, 50),
-    )
-
+    
+    face_detector = ASSETS.get("face_detector")
+    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+    results = face_detector.detect(mp_image)
+    
+    faces = []
+    if results.detections:
+        for detection in results.detections:
+            bbox = detection.bounding_box
+            faces.append((max(0, bbox.origin_x), max(0, bbox.origin_y), bbox.width, bbox.height))
+            
     face_box = pick_largest_face(faces)
     if face_box is None:
         return {
@@ -695,9 +730,9 @@ def predict_from_payload(image_data: str) -> dict[str, Any]:
 
     model_data = ASSETS.get("model_data", {})
     face_roi = preprocess_face(
-        gray,
+        rgb,
         face_box,
-        input_size=model_data.get("input_size", ASSETS["input_size"]),
+        input_size=ASSETS.get("input_size", (128, 128)),
         padding=0.20,
         preprocess_mode=str(model_data.get("preprocess_mode", "method1")),
     )
