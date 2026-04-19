@@ -244,12 +244,19 @@ class CameraService:
         last_stream_ts = 0.0
 
         while self.running and self.capture is not None:
-            for _ in range(self.stale_grab_count):
-                self.capture.grab()
+            try:
+                for _ in range(self.stale_grab_count):
+                    self.capture.grab()
 
-            ok, frame = self.capture.retrieve()
-            if not ok:
-                ok, frame = self.capture.read()
+                ok, frame = self.capture.retrieve()
+                if not ok:
+                    ok, frame = self.capture.read()
+            except AttributeError:
+                break
+            except cv2.error:
+                # Catch random C++ driver exceptions from OpenCV DirectShow backend
+                ok = False
+                frame = None
 
             if not ok:
                 with self.lock:

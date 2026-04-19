@@ -23,7 +23,7 @@
 
           <h1>Developer Tools</h1>
           <p class="lead">
-            Switch between two CBIR pipelines at runtime and monitor live
+            Switch between three CBIR pipelines at runtime and monitor live
             prediction quality indicators.
           </p>
 
@@ -66,6 +66,17 @@
                 %}
               >
                 CBIR Method 2
+              </option>
+              <option
+                value="cbir_method3"
+                {%
+                if
+                model_type=="cbir_method3"
+                %}selected{%
+                endif
+                %}
+              >
+                CBIR Method 3
               </option>
             </select>
             <div

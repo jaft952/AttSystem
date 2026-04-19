@@ -27,13 +27,16 @@ let currentModel = config.modelType || "cbir_method1";
 const MODEL_PREF_KEY = "attsystem_selected_model";
 const recentStatuses = [];
 const WINDOW_SIZE = 60;
-const SUPPORTED_MODELS = ["cbir_method1", "cbir_method2"];
+const SUPPORTED_MODELS = ["cbir_method1", "cbir_method2", "cbir_method3"];
 const BBOX_HEIGHT_SCALE = 1;
 const BBOX_UPWARD_BIAS = 0.55;
 const FRAME_W = 640;
 const FRAME_H = 480;
 
 function getModelLabel(model) {
+  if (model === "cbir_method3") {
+    return "CBIR Method 3";
+  }
   if (model === "cbir_method2") {
     return "CBIR Method 2";
   }

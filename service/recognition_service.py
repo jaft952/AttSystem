@@ -30,12 +30,11 @@ MODELS_ROOT = PROJECT_ROOT / "models"
 CONFIG_ROOT = PROJECT_ROOT / "config"
 
 RUNTIME_CONFIG_PATH = CONFIG_ROOT / "realtime_model_config.json"
-HAAR_CASCADE_PATH = (
-    Path(cv2.__file__).resolve().parent / "data" / "haarcascade_frontalface_default.xml"
-)
+SSD_PROTOTXT_PATH = MODELS_ROOT / "ssd" / "deploy.prototxt"
+SSD_MODEL_PATH = MODELS_ROOT / "ssd" / "res10.caffemodel"
 MODEL_LOCK = threading.Lock()
 MODEL_SWITCH_LOCK = threading.Lock()
-CBIR_MODEL_TYPES = {"cbir_method1", "cbir_method2"}
+CBIR_MODEL_TYPES = {"cbir_method1", "cbir_method2", "cbir_method3"}
 DEFAULT_MODEL_TYPE = "cbir_method1"
 
 DEFAULT_ACCEPTANCE_THRESHOLD = 160.0
@@ -301,16 +300,16 @@ def load_runtime_assets() -> dict[str, Any]:
         model_data = load_cbir_model(runtime_config, fallback_type)
         loaded_model_type = fallback_type
 
-    face_cascade = cv2.CascadeClassifier(str(HAAR_CASCADE_PATH))
-    if face_cascade.empty():
-        raise RuntimeError(f"Failed to load Haar cascade: {HAAR_CASCADE_PATH}")
+    face_detector = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+    if face_detector.empty():
+        raise RuntimeError("Failed to load Haar Cascade from cv2.data!")
 
     return {
         "runtime_config": runtime_config,
         "model_type": loaded_model_type,
         "model_data": model_data,
         "input_size": model_data["input_size"],
-        "face_cascade": face_cascade,
+        "face_detector": face_detector,
     }
 
 
@@ -413,6 +412,34 @@ def preprocess_face(
     preprocess_mode: str = "method1",
 ):
     x, y, w, h = face_box
+
+    # Face Alignment: align rotation based on eye landmarks
+    css_location = [(y, x + w, y + h, x)]
+    try:
+        import face_recognition
+        # Use "small" model for 5-point landmarks (EXTREMELY FAST compared to default 68-point)
+        landmarks = face_recognition.face_landmarks(rgb_frame, css_location, model="small")
+        if landmarks and "left_eye" in landmarks[0] and "right_eye" in landmarks[0]:
+            left_eye_points = landmarks[0]["left_eye"]
+            right_eye_points = landmarks[0]["right_eye"]
+            
+            left_center = np.mean(left_eye_points, axis=0).astype(int)
+            right_center = np.mean(right_eye_points, axis=0).astype(int)
+            
+            dy = right_center[1] - left_center[1]
+            dx = right_center[0] - left_center[0]
+            angle = np.degrees(np.arctan2(dy, dx))
+            
+            eyes_center = (
+                int((left_center[0] + right_center[0]) / 2.0),
+                int((left_center[1] + right_center[1]) / 2.0)
+            )
+            
+            M = cv2.getRotationMatrix2D(eyes_center, angle, 1.0)
+            rgb_frame = cv2.warpAffine(rgb_frame, M, (rgb_frame.shape[1], rgb_frame.shape[0]), flags=cv2.INTER_CUBIC, borderMode=cv2.BORDER_REPLICATE)
+    except Exception:
+        pass # Skip alignment if libraries fail
+
     pad_x = int(w * padding)
     pad_y = int(h * padding)
 
@@ -593,34 +620,13 @@ def predict_face(face_roi: np.ndarray) -> dict[str, Any]:
 
 
 def process_camera_frame(frame: np.ndarray):
-    import face_recognition
+    face_detector = ASSETS.get("face_detector")
+    gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    faces = face_detector.detectMultiScale(
+        gray_frame, scaleFactor=1.1, minNeighbors=5, minSize=(60, 60)
+    )
     rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     
-    fh, fw = frame.shape[:2]
-    detect_scale = min(1.0, 480.0 / min(fh, fw))
-    detect_scale = max(detect_scale, 0.5)
-
-    small_rgb = cv2.resize(
-        rgb,
-        (0, 0),
-        fx=detect_scale,
-        fy=detect_scale,
-        interpolation=cv2.INTER_AREA,
-    )
-    
-    locations = face_recognition.face_locations(small_rgb, model="hog")
-    
-    faces = []
-    if locations:
-        inv_scale = 1.0 / detect_scale
-        for (top, right, bottom, left) in locations:
-            x = int(left * inv_scale)
-            y = int(top * inv_scale)
-            w = int((right - left) * inv_scale)
-            h = int((bottom - top) * inv_scale)
-            faces.append((x, y, w, h))
-            
-    faces = np.array(faces, dtype=np.int32) if len(faces) > 0 else np.array([])
     face_box = pick_largest_face(faces)
     if face_box is None:
         prediction = {
@@ -665,39 +671,6 @@ def process_camera_frame(frame: np.ndarray):
     )
     return None, prediction, face_roi
 
-
-    model_data = ASSETS.get("model_data", {})
-    face_roi = preprocess_face(
-        gray,
-        face_box,
-        input_size=ASSETS["input_size"],
-        padding=0.20,
-        preprocess_mode=str(model_data.get("preprocess_mode", "method1")),
-    )
-    if face_roi is None:
-        prediction = {
-            "status": "invalid_roi",
-            "name": "Invalid ROI",
-            "raw_name": "unknown",
-            "confidence": None,
-            "accepted": False,
-            "bbox": None,
-            "message": "Face ROI could not be prepared.",
-        }
-        return None, prediction, None
-
-    prediction = predict_face(face_roi)
-    x, y, w, h = map(int, face_box)
-    prediction.update(
-        {
-            "status": "ok",
-            "bbox": {"x": x, "y": y, "w": w, "h": h},
-            "message": "Prediction updated.",
-        }
-    )
-    return None, prediction, None
-
-
 def decode_image_data(image_data: str) -> np.ndarray:
     if "," in image_data:
         image_data = image_data.split(",", 1)[1]
@@ -710,36 +683,16 @@ def decode_image_data(image_data: str) -> np.ndarray:
 
 
 def predict_from_payload(image_data: str) -> dict[str, Any]:
-    import face_recognition
     frame = decode_image_data(image_data)
     frame = cv2.flip(frame, 1)
     
+    face_detector = ASSETS.get("face_detector")
+    gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    faces = face_detector.detectMultiScale(
+        gray_frame, scaleFactor=1.1, minNeighbors=5, minSize=(60, 60)
+    )
     rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     
-    fh, fw = frame.shape[:2]
-    detect_scale = min(1.0, 480.0 / min(fh, fw))
-    detect_scale = max(detect_scale, 0.5)
-
-    small_rgb = cv2.resize(
-        rgb,
-        (0, 0),
-        fx=detect_scale,
-        fy=detect_scale,
-        interpolation=cv2.INTER_AREA,
-    )
-    
-    locations = face_recognition.face_locations(small_rgb, model="hog")
-    faces = []
-    if locations:
-        inv_scale = 1.0 / detect_scale
-        for (top, right, bottom, left) in locations:
-            x = int(left * inv_scale)
-            y = int(top * inv_scale)
-            w = int((right - left) * inv_scale)
-            h = int((bottom - top) * inv_scale)
-            faces.append((x, y, w, h))
-            
-    faces = np.array(faces, dtype=np.int32) if len(faces) > 0 else np.array([])
     face_box = pick_largest_face(faces)
     if face_box is None:
         return {
