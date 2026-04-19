@@ -4,6 +4,7 @@ import shutil
 import threading
 import time
 import tempfile
+import mediapipe as mp
 from pathlib import Path
 from typing import Any
 
@@ -300,9 +301,24 @@ def load_runtime_assets() -> dict[str, Any]:
         model_data = load_cbir_model(runtime_config, fallback_type)
         loaded_model_type = fallback_type
 
-    face_detector = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
-    if face_detector.empty():
-        raise RuntimeError("Failed to load Haar Cascade from cv2.data!")
+    try:
+        import mediapipe as mp
+        from mediapipe.tasks.python import vision as mp_vision
+        FaceDetector = mp_vision.FaceDetector
+        FaceDetectorOptions = mp_vision.FaceDetectorOptions
+        BaseOptions = mp.tasks.BaseOptions
+        
+        model_path = MODELS_ROOT / "blaze_face_short_range.tflite"
+        if not model_path.exists():
+            raise FileNotFoundError(f"Missing MediaPipe model: {model_path}")
+            
+        options = FaceDetectorOptions(
+            base_options=BaseOptions(model_asset_path=str(model_path)),
+            min_detection_confidence=0.5
+        )
+        face_detector = FaceDetector.create_from_options(options)
+    except ImportError:
+        raise RuntimeError("MediaPipe is missing. Please install it using 'pip install mediapipe'.")
 
     return {
         "runtime_config": runtime_config,
@@ -349,6 +365,7 @@ def get_health_payload() -> dict[str, Any]:
 
 
 def get_latest_payload() -> dict[str, Any]:
+    CAMERA_SERVICE.keep_alive()
     payload = CAMERA_SERVICE.get_latest()
     payload["model_type"] = ASSETS.get("model_type", DEFAULT_MODEL_TYPE)
     return payload
@@ -364,6 +381,7 @@ def stream_predictions():
     """
     last_seq = -1
     while True:
+        CAMERA_SERVICE.keep_alive()
         if not CAMERA_SERVICE.running:
             time.sleep(0.1)
             yield None  # keepalive while camera is off
@@ -379,6 +397,7 @@ def stream_predictions():
 def stream_frames():
     last_sent_seq = -1
     while True:
+        CAMERA_SERVICE.keep_alive()
         if not CAMERA_SERVICE.running:
             time.sleep(0.05)
             continue
@@ -621,12 +640,17 @@ def predict_face(face_roi: np.ndarray) -> dict[str, Any]:
 
 def process_camera_frame(frame: np.ndarray):
     face_detector = ASSETS.get("face_detector")
-    gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    faces = face_detector.detectMultiScale(
-        gray_frame, scaleFactor=1.1, minNeighbors=5, minSize=(60, 60)
-    )
     rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     
+    mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+    results = face_detector.detect(mp_image)
+    
+    faces = []
+    if results.detections:
+        for detection in results.detections:
+            bbox = detection.bounding_box
+            faces.append((max(0, bbox.origin_x), max(0, bbox.origin_y), bbox.width, bbox.height))
+            
     face_box = pick_largest_face(faces)
     if face_box is None:
         prediction = {
@@ -687,12 +711,16 @@ def predict_from_payload(image_data: str) -> dict[str, Any]:
     frame = cv2.flip(frame, 1)
     
     face_detector = ASSETS.get("face_detector")
-    gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    faces = face_detector.detectMultiScale(
-        gray_frame, scaleFactor=1.1, minNeighbors=5, minSize=(60, 60)
-    )
     rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+    results = face_detector.detect(mp_image)
     
+    faces = []
+    if results.detections:
+        for detection in results.detections:
+            bbox = detection.bounding_box
+            faces.append((max(0, bbox.origin_x), max(0, bbox.origin_y), bbox.width, bbox.height))
+            
     face_box = pick_largest_face(faces)
     if face_box is None:
         return {

@@ -24,7 +24,7 @@
     "yong_kang",
     "zi_herng"
   ],
-  "distance": "cosine_on_l2_normalized",
+  "distance": "euclidean",
   "source_folder": "c:\\Users\\jaft9\\School\\AttSystem\\data\\face",
   "split_path": "c:\\Users\\jaft9\\School\\AttSystem\\index\\cbir_eval_split.json",
   "preprocess_method": "method3"

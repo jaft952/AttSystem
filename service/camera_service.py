@@ -62,6 +62,7 @@ class CameraService:
         }
         self.frame_count = 0
         self.last_error: str | None = None
+        self.last_client_ts = time.time()
 
         self.inference_interval_sec = inference_interval_sec
         self.jpeg_quality = int(max(30, min(95, jpeg_quality)))
@@ -96,10 +97,15 @@ class CameraService:
         self._prediction_seq: int = 0
         self.last_face_box: tuple[int, int, int, int] | None = None
 
+    def keep_alive(self):
+        self.last_client_ts = time.time()
+
     def start(self):
         if self.running:
+            self.keep_alive()
             return
 
+        self.keep_alive()
         capture = cv2.VideoCapture(self.camera_index, cv2.CAP_DSHOW)
         if not capture.isOpened():
             capture.release()
@@ -244,10 +250,12 @@ class CameraService:
         last_stream_ts = 0.0
 
         while self.running and self.capture is not None:
-            try:
-                for _ in range(self.stale_grab_count):
-                    self.capture.grab()
+            if time.time() - self.last_client_ts > 5.0:
+                # Auto-stop camera to save resources if no clients are connected
+                threading.Thread(target=self.stop, daemon=True).start()
+                break
 
+            try:
                 ok, frame = self.capture.retrieve()
                 if not ok:
                     ok, frame = self.capture.read()
