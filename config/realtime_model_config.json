@@ -1,11 +1,11 @@
 {
-  "model_type": "cbir_method2",
+  "model_type": "cbir_method3",
   "models": {
     "cbir_method1": {
-      "index_path": "models/cbir_method1_index.npz",
-      "meta_path": "models/cbir_method1_meta.json",
-      "similarity_threshold": 0.5,
-      "similarity_strict_unknown_threshold": 0.5,
+      "index_path": "index/cbir_method1_index.npz",
+      "meta_path": "index/cbir_method1_meta.json",
+      "similarity_threshold": 0.4,
+      "similarity_strict_unknown_threshold": 0.4,
       "similarity_min_margin": 0.02,
       "input_size": [
         128,
@@ -13,13 +13,14 @@
       ],
       "preprocess_mode": "method1",
       "display_name": "CBIR Method 1",
-      "notes": "CBIR pipeline using preprocessing method 1."
+      "notes": "CBIR pipeline using preprocessing method 1.",
+      "faiss_index_path": "index/cbir_method1_index.faiss"
     },
     "cbir_method2": {
-      "index_path": "models/cbir_method2_index.npz",
-      "meta_path": "models/cbir_method2_meta.json",
-      "similarity_threshold": 0.5,
-      "similarity_strict_unknown_threshold": 0.5,
+      "index_path": "index/cbir_method2_index.npz",
+      "meta_path": "index/cbir_method2_meta.json",
+      "similarity_threshold": 0.4,
+      "similarity_strict_unknown_threshold": 0.4,
       "similarity_min_margin": 0.02,
       "input_size": [
         128,
@@ -27,7 +28,23 @@
       ],
       "preprocess_mode": "method2",
       "display_name": "CBIR Method 2",
-      "notes": "CBIR pipeline using preprocessing method 2."
+      "notes": "CBIR pipeline using preprocessing method 2.",
+      "faiss_index_path": "index/cbir_method2_index.faiss"
+    },
+    "cbir_method3": {
+      "index_path": "index/cbir_method3_index.npz",
+      "meta_path": "index/cbir_method3_meta.json",
+      "similarity_threshold": 0.4,
+      "similarity_strict_unknown_threshold": 0.4,
+      "similarity_min_margin": 0.02,
+      "input_size": [
+        128,
+        128
+      ],
+      "preprocess_mode": "method3",
+      "display_name": "CBIR Method 3",
+      "notes": "CBIR pipeline using preprocessing method 3.",
+      "faiss_index_path": "index/cbir_method3_index.faiss"
     }
   },
   "notes": {
