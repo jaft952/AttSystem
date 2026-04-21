@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Admin Login | {{ app_name }}</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="{{ url_for('static', filename='index.css') }}" />
+    <style>
+      .login-container {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        height: 100vh;
+        width: 100%;
+        background-color: var(--color-surface);
+      }
+      .login-card {
+        background-color: var(--color-background);
+        padding: 40px;
+        border-radius: 12px;
+        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+        width: 100%;
+        max-width: 400px;
+        text-align: center;
+      }
+      .input-group {
+        margin: 20px 0;
+        text-align: left;
+      }
+      .input-group input {
+        width: 100%;
+        padding: 12px;
+        margin-top: 8px;
+        border-radius: 6px;
+        border: 1px solid var(--color-edge);
+        background: var(--color-surface);
+        color: var(--color-ink);
+        font-family: inherit;
+      }
+      .btn-submit {
+        width: 100%;
+        padding: 12px;
+        background-color: var(--color-brand);
+        color: white;
+        border: none;
+        border-radius: 6px;
+        font-weight: 700;
+        cursor: pointer;
+      }
+      .btn-submit:hover {
+        opacity: 0.9;
+      }
+      .error-msg {
+        color: #ff4d4d;
+        margin-bottom: 15px;
+        font-size: 14px;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="app-shell login-container">
+      <div class="login-card">
+        <h2>Developer Tools Login</h2>
+        <p class="hint">System configuration requires administrator access.</p>
+        
+        {% if error %}
+        <p class="error-msg">{{ error }}</p>
+        {% endif %}
+        
+        <form method="POST" action="{{ url_for('login') }}">
+          <div class="input-group">
+            <label>Admin Password:</label>
+            <!-- Hardcoded for demo: admin123 -->
+            <input type="password" name="password" placeholder="Enter password" required autofocus>
+          </div>
+          <button type="submit" class="btn-submit">Login</button>
+        </form>
+        <br/>
+        <a href="/" style="color: var(--color-subtle); display: inline-block; margin-top: 10px;">&larr; Back to Main System</a>
+      </div>
+    </main>
+  </body>
+</html>
