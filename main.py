@@ -1,8 +1,10 @@
 import json
+import io
+import csv
 import threading
 from datetime import datetime
 from pathlib import Path
-from flask import Flask, Response, jsonify, render_template, request, send_from_directory, stream_with_context
+from flask import Flask, Response, jsonify, render_template, request, send_from_directory, stream_with_context, session, redirect, url_for
 
 from service import recognition_service
 
@@ -17,6 +19,7 @@ ATTENDANCE_LOCK = threading.Lock()
 ATTENDANCE_ROOT.mkdir(parents=True, exist_ok=True)
 
 APP = Flask(__name__, template_folder=str(VIEWS_ROOT), static_folder=str(UI_ROOT), static_url_path="/ui")
+APP.secret_key = "attsystem_super_secret_secure_key"  # Required for session management
 
 
 @APP.get("/scripts/<path:filename>")
@@ -26,6 +29,7 @@ def script_asset(filename: str):
 
 @APP.get("/")
 def index():
+    session.pop("is_admin", None)
     return render_template(
         "index.html",
         app_name="AttSystem",
@@ -133,6 +137,41 @@ def api_attendance_today():
         payload, _, labels = _load_attendance(day_key)
         return jsonify({"status": "ok", "attendance": _build_attendance_summary(payload, labels)})
 
+@APP.get("/api/attendance/export")
+def api_attendance_export():
+    date_str = request.args.get("date") or _today_key()
+    
+    with ATTENDANCE_LOCK:
+        payload, _, labels = _load_attendance(date_str)
+        summary = _build_attendance_summary(payload, labels)
+    
+    # Define CSV outputs
+    si = io.StringIO()
+    cw = csv.writer(si)
+    cw.writerow(["Name", "Status", "First Seen Time", "Last Seen Time", "Best Confidence"])
+    
+    for person in summary.get("present", []):
+        cw.writerow([
+            person.get("name", "Unknown"), 
+            "Present", 
+            person.get("first_seen_at", ""), 
+            person.get("last_seen_at", ""), 
+            person.get("best_confidence", "")
+        ])
+        
+    for person_name in summary.get("absent", []):
+        cw.writerow([
+            person_name, 
+            "Absent", 
+            "", 
+            "", 
+            ""
+        ])
+
+    output = Response(si.getvalue(), mimetype="text/csv")
+    output.headers["Content-Disposition"] = f"attachment; filename=attendance_{date_str}.csv"
+    return output
+
 
 @APP.post("/api/attendance/mark")
 def api_attendance_mark():
@@ -196,8 +235,24 @@ def api_attendance_unmark():
     return jsonify({"status": "ok", "unmarked": label, "attendance": summary})
 
 
+@APP.route("/login", methods=["GET", "POST"])
+def login():
+    error = None
+    if request.method == "POST":
+        password = request.form.get("password")
+        
+        if password == "admin123":
+            session["is_admin"] = True
+            return redirect(url_for("developer_tools"))
+        else:
+            error = "Invalid Password"
+    return render_template("login.html", error=error, app_name="AttSystem")
+
+
 @APP.get("/dev")
 def developer_tools():
+    if not session.get("is_admin"):
+        return redirect(url_for("login"))
     return render_template("dev.html", **recognition_service.get_developer_tools_template_context("AttSystem"))
 
 

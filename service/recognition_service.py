@@ -1,3 +1,4 @@
+from __future__ import annotations
 import base64
 import json
 import shutil
@@ -472,6 +473,9 @@ def preprocess_face(
         return None
 
     mode = (preprocess_mode or "method1").lower()
+    
+    print(f"-----> [SYSTEM TEST] Using Preprocessing Mode: {mode.upper()} <-----")
+
     if mode == "method2":
         denoised = cv2.bilateralFilter(roi, d=5, sigmaColor=50, sigmaSpace=50)
         lab = cv2.cvtColor(denoised, cv2.COLOR_RGB2LAB)

@@ -1,16 +1,18 @@
-# 🎓 AttSystem — Dual-CBIR Face Attendance System
+# 🎓 AttSystem — Advanced CBIR Face Attendance System
 
-A Flask-based attendance prototype powered by two CBIR pipelines (different preprocessing methods), with live camera streaming and runtime model switching.
+A Flask-based attendance prototype powered by three Content-Based Image Retrieval (CBIR) pipelines. It features live camera streaming, runtime model switching, MediaPipe face detection, and Euclidean distance-based deep metric learning for highly accurate face recognition.
 
 ---
 
 ## ✨ Features
 
-- 📷 **Live camera stream** via Flask MJPEG endpoint (OpenCV backend)
-- 🧠 **Dual CBIR face recognition** with two preprocessing methods
-- 🔀 **Runtime switching** between CBIR Method 1 and CBIR Method 2
-- ⚡ **Notebook-based retraining** to refresh each method's index artifacts
-- 🌐 **Web UI** for attendance and developer monitoring
+- 📷 **Live camera stream** via Flask MJPEG endpoint with multiprocessing backend.
+- 🧠 **Triple CBIR face recognition** with dynamic pre-processing pipelines.
+- 📐 **Euclidean Distance Metric** (`Sim = 1.0 - Euclidean`) optimized for dlib's ResNet-34 embeddings.
+- 👤 **BlazeFace Detection** utilizing Google's MediaPipe for robust, lightning-fast face localization.
+- 🔀 **Runtime switching** seamlessly between CBIR Method 1, 2, and 3.
+-📊 **Rigorous Evaluation** with FAR/FRR threshold tuning, Equal Error Rate (EER) analysis, and Genuine vs. Impostor distributions.
+- 🌐 **Web UI** for attendance and developer monitoring.
 
 ---
 
@@ -36,17 +38,17 @@ python -m venv .venv
 # Activate it
 .\.venv\Scripts\Activate.ps1
 
-# Install dependencies
+# Install dependencies (Includes OpenCV, MediaPipe, dlib, SciPy, etc.)
 python -m pip install -r requirement.txt
 ```
 
 ### 2. Prepare Raw Dataset
 
-Place your raw images into `data/raw/<person_name>/`:
+Place your raw images into `data/face/<person_name>/`:
 
 ```
 data/
-└── raw/
+└── face/
     ├── benjamin/
     │   └── *.jpg
     └── chern_tak/
@@ -55,60 +57,36 @@ data/
 
 > **Tip:** Use one folder per identity. Include varied lighting conditions and angles for best results.
 
-### 3. Split + Augment Dataset
+### 3. Standardize + Augment Dataset
 
 Run `ml/augmentation.ipynb` first.
 
-It performs both steps in one run:
+- It uses **Albumentations** to generate realistic environmental variations (blur, noise, lighting changes, perspective shifts).
+- Generates up to 8 augmented variations per original image, all saved inside the same `data/face` subfolders.
 
-- Splits `data/raw` into `data/train` and `data/test` (deterministic split).
-- Standardizes and augments only `data/train`.
+### 4. Run the ML Pipelines (CBIR Methods)
 
-### 4. Run the ML Pipelines (CBIR Method 1 + Method 2)
+Open and run these notebooks to build the reference galleries (indexes). Each uses different image enhancement strategies before passing the ROI to the ResNet-34 embedding model:
 
-Open and run these notebooks:
+| Notebook                | Preprocessing Strategy                                                                                   | Output Artifacts                                               |
+| ----------------------- | -------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------- |
+| `ml/cbir_method1.ipynb` | **Baseline:** Simple standard resizing to 128x128.                                                       | `index/cbir_method1_index.npz`, `_meta.json`                   |
+| `ml/cbir_method2.ipynb` | **Color Enhanced:** HSV conversion + CLAHE on the V-channel for dynamic contrast.                        | `index/cbir_method2_index.npz`, `_meta.json`                   |
+| `ml/cbir_method3.ipynb` | **Aggressive:** Grayscale + Histogram Equalization + Bilateral Filter + Unsharp Masking.                 | `index/cbir_method3_index.npz`, `_meta.json`                   |
 
-| Step | Notebook                | Output                                                         |
-| ---- | ----------------------- | -------------------------------------------------------------- |
-| 1    | `ml/cbir_method1.ipynb` | `index/cbir_method1_index.npz`, `index/cbir_method1_meta.json` |
-| 2    | `ml/cbir_method2.ipynb` | `index/cbir_method2_index.npz`, `index/cbir_method2_meta.json` |
+*(All notebooks automatically use MediaPipe BlazeFace to tightly crop the face before applying these filters).*
 
-Both notebooks now train from `data/train` only.
-
-### 5. Run Evaluation
+### 5. Run Extreme Evaluation
 
 Run `ml/evaluation.ipynb`.
 
-- Queries are loaded only from `data/test`.
-- Gallery vectors are loaded from `index/cbir_method*_index.npz` (built from train).
-
-After both runs, `config/realtime_model_config.json` can switch between `cbir_method1` and `cbir_method2` at runtime.
-
-### 3.1 FAISS Index Behavior (Automatic)
-
-FAISS is now part of the default runtime pipeline.
-
-- The repository includes prebuilt FAISS files for both CBIR methods.
-- Runtime config uses project-relative paths, so cloned projects work across different machines.
-- If a FAISS file is missing but NPZ embeddings exist, the app auto-builds and saves the `.faiss` file on startup.
-
-Optional manual rebuild (only if you want to refresh indexes immediately after retraining):
-
-```powershell
-.\.venv\Scripts\Activate.ps1
-python ml/build_faiss_indexes.py --model all --overwrite
-```
-
-#### Preprocessing Used By Each CBIR Method
-
-Both CBIR notebooks start from a grayscale face image, detect the largest face ROI with a Haar cascade, add a small padding around the face, and resize the result to 128 x 128 before extracting the embedding.
-
-| Method        | Preprocessing summary                                                                               |
-| ------------- | --------------------------------------------------------------------------------------------------- |
-| CBIR Method 1 | Uses CLAHE to boost local contrast, then applies a light Gaussian blur before resizing.             |
-| CBIR Method 2 | Uses global histogram equalization, then applies stronger denoising and sharpening before resizing. |
+- Cross-evaluates all 3 CBIR methods on a hold-out test set.
+- Utilizes `scipy.spatial.distance.cdist(metric="euclidean")` to calculate true spatial separation instead of Cosine (which compresses unnormalized vectors).
+- Generates detailed academic charts: **FAR vs FRR Threshold Tuning**, **Genuine vs. Impostor Distributions**, and **Confusion Matrices**.
 
 ### 6. Launch the Web App
+
+Once the `.npz` indexes and `.json` metadatas are generated, start the backend server:
 
 ```powershell
 .\.venv\Scripts\Activate.ps1
@@ -120,8 +98,6 @@ python main.py
 | Attendance      | http://127.0.0.1:5000     |
 | Developer Tools | http://127.0.0.1:5000/dev |
 
-> Also accessible on your local network at `http://192.168.1.82:5000`.
-
 ---
 
 ## 🧪 Developer Tools
@@ -129,17 +105,15 @@ python main.py
 ### Step-by-Step
 
 1. Navigate to `/dev` and ensure the camera stream is live.
-2. Switch runtime model between **CBIR Method 1** and **CBIR Method 2**.
-3. Review live metrics such as accepted rate, known-face rate, no-face rate, and frame count.
-
-Reinforcement and retraining flow has been removed from the runtime app.
+2. Switch runtime model between **CBIR Method 1, 2, and 3** via the dropdown.
+3. Review live metrics such as accepted similarity, identity, bounding box coordinates, and threshold demarcations.
 
 ---
 
 ## 🛠️ Troubleshooting
 
 <details>
-<summary><strong>App startup issues</strong></summary>
+<summary><strong>App startup issues / Address already in use</strong></summary>
 
 Run only one server instance at a time. Start with:
 
@@ -156,9 +130,9 @@ Invoke-WebRequest -UseBasicParsing http://127.0.0.1:5000/api/health | Select-Obj
 </details>
 
 <details>
-<summary><strong>Camera not working</strong></summary>
+<summary><strong>Camera not working / Freezing</strong></summary>
 
-Ensure the webcam is not being used by another application. Restart the app and reopen `/dev`.
+Ensure the webcam is not being used by another application (like Zoom or Teams). The `camera_service.py` runs in a separate multiprocessing loop—if it crashes, check the terminal for `cv2.VideoCapture` errors.
 
 </details>
 
@@ -170,11 +144,8 @@ Ensure the webcam is not being used by another application. Restart the app and 
 | ----------------------------------- | ------------------------------- |
 | `main.py`                           | App entry point                 |
 | `service/recognition_service.py`    | Runtime recognition backend     |
-| `service/camera_service.py`         | Camera stream service           |
-| `presentation/views/dev.html`       | Developer tools page template   |
-| `scripts/dev.js`                    | Developer tools UI script       |
-| `ml/cbir_method1.ipynb`             | CBIR method 1 training notebook |
-| `ml/cbir_method2.ipynb`             | CBIR method 2 training notebook |
-| `index/cbir_method1_index.npz`      | Runtime CBIR index (method 1)   |
-| `index/cbir_method2_index.npz`      | Runtime CBIR index (method 2)   |
-| `config/realtime_model_config.json` | Runtime model configuration     |
+| `service/camera_service.py`         | Multiprocessing camera stream   |
+| `ml/augmentation.ipynb`             | Albumentations pipeline         |
+| `ml/cbir_method*.ipynb`             | Training / Indexing notebooks   |
+| `ml/evaluation.ipynb`               | Academic Evaluation charts      |
+| `index/`                            | Generated NPZ/JSON model data   |
