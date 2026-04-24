@@ -4,8 +4,8 @@
     "cbir_method1": {
       "index_path": "index/cbir_method1_index.npz",
       "meta_path": "index/cbir_method1_meta.json",
-      "similarity_threshold": 0.55,
-      "similarity_strict_unknown_threshold": 0.55,
+      "similarity_threshold": 0.50,
+      "similarity_strict_unknown_threshold": 0.50,
       "similarity_min_margin": 0.01,
       "input_size": [
         128,
@@ -18,8 +18,8 @@
     "cbir_method2": {
       "index_path": "index/cbir_method2_index.npz",
       "meta_path": "index/cbir_method2_meta.json",
-      "similarity_threshold": 0.55,
-      "similarity_strict_unknown_threshold": 0.55,
+      "similarity_threshold": 0.50,
+      "similarity_strict_unknown_threshold": 0.50,
       "similarity_min_margin": 0.01,
       "input_size": [
         128,
@@ -32,8 +32,8 @@
     "cbir_method3": {
       "index_path": "index/cbir_method3_index.npz",
       "meta_path": "index/cbir_method3_meta.json",
-      "similarity_threshold": 0.55,
-      "similarity_strict_unknown_threshold": 0.55,
+      "similarity_threshold": 0.50,
+      "similarity_strict_unknown_threshold": 0.50,
       "similarity_min_margin": 0.01,
       "input_size": [
         128,
