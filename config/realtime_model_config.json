@@ -1,5 +1,5 @@
 {
-  "model_type": "cbir_method1",
+  "model_type": "cbir_method2",
   "models": {
     "cbir_method1": {
       "index_path": "index/cbir_method1_index.npz",

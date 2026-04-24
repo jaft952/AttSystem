@@ -1,3 +1,4 @@
+from __future__ import annotations
 import base64
 import json
 import shutil
@@ -7,17 +8,9 @@ import tempfile
 import mediapipe as mp
 from pathlib import Path
 from typing import Any
-
+import scipy.spatial.distance as spdistance
 import cv2
 import numpy as np
-
-try:
-    import faiss  # type: ignore
-
-    _FAISS_AVAILABLE = True
-except Exception:
-    faiss = None  # type: ignore[assignment]
-    _FAISS_AVAILABLE = False
 
 from service.camera_service import CameraService
 
@@ -41,7 +34,7 @@ DEFAULT_MODEL_TYPE = "cbir_method1"
 DEFAULT_ACCEPTANCE_THRESHOLD = 160.0
 DEFAULT_STRICT_UNKNOWN_THRESHOLD = 100.0
 MAX_LBPH_MODEL_BYTES = 300 * 1024 * 1024
-DEFAULT_CBIR_STRICT_UNKNOWN_SIMILARITY = 0.72
+DEFAULT_CBIR_STRICT_UNKNOWN_DISTANCE = 0.5
 DEFAULT_CBIR_MIN_MARGIN = 0.035
 
 
@@ -65,20 +58,20 @@ def resolve_strict_unknown_threshold(runtime_config: dict[str, Any], acceptance_
     return min(strict_threshold, acceptance_threshold, DEFAULT_STRICT_UNKNOWN_THRESHOLD)
 
 
-def resolve_cbir_strict_unknown_similarity(cbir_config: dict[str, Any], acceptance_threshold: float) -> float:
-    raw_value = cbir_config.get("similarity_strict_unknown_threshold")
+def resolve_cbir_strict_unknown_distance(cbir_config: dict[str, Any], acceptance_threshold: float) -> float:
+    raw_value = cbir_config.get("distance_strict_unknown_threshold", cbir_config.get("similarity_strict_unknown_threshold"))
     if raw_value is None:
-        strict_threshold = max(acceptance_threshold, DEFAULT_CBIR_STRICT_UNKNOWN_SIMILARITY)
+        strict_threshold = min(acceptance_threshold, DEFAULT_CBIR_STRICT_UNKNOWN_DISTANCE)
     else:
         try:
             strict_threshold = float(raw_value)
         except (TypeError, ValueError):
-            strict_threshold = max(acceptance_threshold, DEFAULT_CBIR_STRICT_UNKNOWN_SIMILARITY)
+            strict_threshold = min(acceptance_threshold, DEFAULT_CBIR_STRICT_UNKNOWN_DISTANCE)
 
     if strict_threshold <= 0:
-        strict_threshold = max(acceptance_threshold, DEFAULT_CBIR_STRICT_UNKNOWN_SIMILARITY)
+        strict_threshold = min(acceptance_threshold, DEFAULT_CBIR_STRICT_UNKNOWN_DISTANCE)
 
-    return float(min(max(strict_threshold, acceptance_threshold), 0.99))
+    return float(min(strict_threshold, acceptance_threshold))
 
 
 def resolve_cbir_min_margin(cbir_config: dict[str, Any]) -> float:
@@ -155,45 +148,13 @@ def load_cbir_model(config: dict[str, Any], model_type: str) -> dict[str, Any]:
     embeddings = np.ascontiguousarray(index_data["embeddings"].astype(np.float32))
     labels = np.asarray(index_data["labels"], dtype=np.int32)
 
-    # Normalize once at load-time so both NumPy and FAISS cosine/IP search
-    # paths can reuse the same unit-length vectors.
-    norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
-    norms = np.maximum(norms, 1e-12)
-    embeddings = embeddings / norms
-
-    faiss_index = None
-    faiss_index_path = index_path.with_suffix(".faiss")
-    if _FAISS_AVAILABLE and embeddings.size > 0 and faiss is not None:
-        configured_faiss_path = _resolve_config_path(cbir_config.get("faiss_index_path", ""))
-        if str(configured_faiss_path).strip() != "":
-            faiss_index_path = configured_faiss_path
-
-        try:
-            if faiss_index_path.exists():
-                candidate = faiss.read_index(str(faiss_index_path))
-                if int(getattr(candidate, "d", -1)) == int(embeddings.shape[1]):
-                    faiss_index = candidate
-        except Exception:
-            faiss_index = None
-
-        if faiss_index is None:
-            candidate = faiss.IndexFlatIP(int(embeddings.shape[1]))
-            candidate.add(embeddings)  # type: ignore[call-arg]
-            faiss_index = candidate
-            # Persist auto-built FAISS so subsequent startups skip rebuilding.
-            try:
-                faiss_index_path.parent.mkdir(parents=True, exist_ok=True)
-                faiss.write_index(candidate, str(faiss_index_path))
-            except Exception:
-                pass
-
     with meta_path.open("r", encoding="utf-8") as handle:
         meta = json.load(handle)
 
     label_names = meta.get("label_names", [])
     label_map = {i: name for i, name in enumerate(label_names)}
 
-    acceptance_threshold = float(cbir_config.get("similarity_threshold", 0.6))
+    acceptance_threshold = float(cbir_config.get("distance_threshold", cbir_config.get("similarity_threshold", 0.6)))
 
     return {
         "embeddings": embeddings,
@@ -201,10 +162,8 @@ def load_cbir_model(config: dict[str, Any], model_type: str) -> dict[str, Any]:
         "labels_array": labels,
         "label_map": label_map,
         "label_names": label_names,
-        "faiss_index": faiss_index,
-        "faiss_enabled": bool(faiss_index is not None),
         "threshold": acceptance_threshold,
-        "strict_unknown_threshold": resolve_cbir_strict_unknown_similarity(
+        "strict_unknown_threshold": resolve_cbir_strict_unknown_distance(
             cbir_config, acceptance_threshold
         ),
         "min_margin": resolve_cbir_min_margin(cbir_config),
@@ -530,17 +489,12 @@ def _predict_cbir(face_roi: np.ndarray, model_data: dict[str, Any]) -> dict[str,
     labels = model_data["labels"]
     labels_array = model_data.get("labels_array", np.asarray(labels, dtype=np.int32))
     label_map = model_data["label_map"]
-    faiss_index = model_data.get("faiss_index")
-    faiss_enabled = bool(model_data.get("faiss_enabled", False) and faiss_index is not None)
     threshold = float(model_data["threshold"])
     strict_unknown_threshold = float(model_data.get("strict_unknown_threshold", threshold))
     min_margin = float(model_data.get("min_margin", DEFAULT_CBIR_MIN_MARGIN))
 
     face_rgb = face_roi.copy() if len(face_roi.shape) == 3 else cv2.cvtColor(face_roi, cv2.COLOR_GRAY2RGB)
     h_roi, w_roi = face_rgb.shape[:2]
-    # Pass the full ROI as the known face location so face_recognition skips
-    # its internal HOG/CNN face detector (we already detected the face with
-    # the Haar cascade).  Location order is (top, right, bottom, left).
     known_locations = [(0, w_roi, h_roi, 0)]
     encodings = face_recognition.face_encodings(face_rgb, known_face_locations=known_locations)
     if len(encodings) == 0:
@@ -556,68 +510,40 @@ def _predict_cbir(face_roi: np.ndarray, model_data: dict[str, Any]) -> dict[str,
         }
 
     query_encoding = np.array(encodings[0], dtype=np.float32)
-    norm = np.linalg.norm(query_encoding)
-    if norm > 1e-12:
-        query_encoding = query_encoding / norm
+    if not np.isfinite(query_encoding).all():
+        return {
+            "label_id": -1,
+            "raw_name": "unknown",
+            "name": "unknown",
+            "confidence": 1.0,
+            "accepted": False,
+            "acceptance_threshold": threshold,
+            "strict_unknown_threshold": strict_unknown_threshold,
+            "message": "Invalid face encoding (NaN/Inf).",
+        }
 
-    if faiss_enabled:
-        # Query a shortlist instead of scanning all vectors in Python.
-        k = int(min(len(labels_array), 16))
-        q = np.ascontiguousarray(query_encoding.reshape(1, -1), dtype=np.float32)
-        similarities, indices = faiss_index.search(q, k)  # type: ignore[union-attr]
+    distances = spdistance.cdist(
+        query_encoding.reshape(1, -1), embeddings, metric="euclidean"
+    )[0]
 
-        valid_positions = [
-            int(pos)
-            for pos in indices[0].tolist()
-            if isinstance(pos, (int, np.integer)) and int(pos) >= 0
-        ]
-        if len(valid_positions) == 0:
-            return {
-                "label_id": -1,
-                "raw_name": "unknown",
-                "name": "unknown",
-                "confidence": 0.0,
-                "accepted": False,
-                "acceptance_threshold": threshold,
-                "strict_unknown_threshold": strict_unknown_threshold,
-                "message": "No nearest neighbor candidates found.",
-            }
+    order = np.argsort(distances)
+    closest_idx = int(order[0])
+    closest_distance = float(distances[closest_idx])
+    closest_label_id = int(labels_array[closest_idx])
+    raw_name = label_map.get(closest_label_id, "unknown")
 
-        closest_idx = valid_positions[0]
-        closest_label_id = int(labels_array[closest_idx])
-        raw_name = label_map.get(closest_label_id, "unknown")
-        similarity = float(similarities[0][0])
+    second_distance = closest_distance
+    for idx in order[1:]:
+        if int(labels_array[idx]) != closest_label_id:
+            second_distance = float(distances[idx])
+            break
 
-        second_similarity = 0.0
-        for rank, idx in enumerate(valid_positions[1:], start=1):
-            if int(labels_array[idx]) != closest_label_id:
-                second_similarity = float(similarities[0][rank])
-                break
-    else:
-        # Fallback path when FAISS is unavailable.
-        distances = 1.0 - (embeddings @ query_encoding)
-        closest_idx = int(np.argmin(distances))
-        closest_distance = float(distances[closest_idx])
-        closest_label_id = int(labels_array[closest_idx])
-        raw_name = label_map.get(closest_label_id, "unknown")
-
-        different_identity_mask = labels_array != closest_label_id
-        if np.any(different_identity_mask):
-            second_distance = float(np.min(distances[different_identity_mask]))
-        else:
-            second_distance = 1.0
-
-        similarity = 1.0 - closest_distance
-        second_similarity = 1.0 - second_distance
-
-    similarity = float(max(-1.0, min(1.0, similarity)))
-    second_similarity = float(max(-1.0, min(1.0, second_similarity)))
-    similarity_margin = max(0.0, similarity - second_similarity)
+    distance_margin = max(0.0, second_distance - closest_distance)
 
     accepted = (
-        similarity >= threshold
-        and similarity >= strict_unknown_threshold
-        and similarity_margin >= min_margin
+        closest_distance <= threshold
+        and closest_distance <= strict_unknown_threshold
+        and distance_margin >= min_margin
     )
     display_name = raw_name if accepted else "unknown"
 
@@ -625,12 +551,12 @@ def _predict_cbir(face_roi: np.ndarray, model_data: dict[str, Any]) -> dict[str,
         "label_id": closest_label_id,
         "raw_name": raw_name,
         "name": display_name,
-        "confidence": float(similarity),
+        "confidence": float(closest_distance),
         "accepted": bool(accepted),
         "acceptance_threshold": threshold,
         "strict_unknown_threshold": strict_unknown_threshold,
-        "second_best_confidence": float(second_similarity),
-        "similarity_margin": float(similarity_margin),
+        "second_best_confidence": float(second_distance),
+        "similarity_margin": float(distance_margin),
         "required_margin": float(min_margin),
     }
 
