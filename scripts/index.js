@@ -23,7 +23,7 @@ let autoMarkState = {
 let presentNames = new Set();
 const MODEL_PREF_KEY = "attsystem_selected_model";
 const SUPPORTED_MODELS = ["cbir_method1", "cbir_method2", "cbir_method3"];
-const AUTO_MARK_CONFIDENCE_THRESHOLD = 0.9;
+const AUTO_MARK_CONFIDENCE_THRESHOLD = 0.55;
 const AUTO_MARK_HOLD_MS = 1000;
 const BBOX_HEIGHT_SCALE = 2;
 const BBOX_UPWARD_BIAS = 0.55;
@@ -214,7 +214,7 @@ function canAutoMark(prediction) {
     prediction.raw_name &&
     prediction.raw_name !== "unknown" &&
     typeof prediction.confidence === "number" &&
-    prediction.confidence >= AUTO_MARK_CONFIDENCE_THRESHOLD,
+    prediction.confidence <= AUTO_MARK_CONFIDENCE_THRESHOLD,
   );
 }
 
@@ -244,6 +244,7 @@ function resetAutoMarkState() {
 
 async function maybeAutoMark(prediction) {
   const candidate = getAutoMarkCandidate(prediction);
+  
   if (!candidate || autoMarkState.inFlight) {
     if (!candidate) {
       resetAutoMarkState();
